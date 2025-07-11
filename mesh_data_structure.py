@@ -22,32 +22,51 @@ class Triangle:
         self.index = index
         self.normal = None
 
-def build_mesh_from_stl(file_path):
+# mesh_data_structure.py
+def build_mesh_from_stl(file_path, progress_callback=None):
     mesh = pv.read(file_path)
     points = mesh.points
     faces = mesh.faces.reshape((-1, 4))[:, 1:4]  # assuming triangular mesh
-    
+
+    total_steps = (
+    len(points) +          # vertex creation
+    len(faces) +           # triangle creation
+    len(faces) +           # edge generation (loop once per triangle)
+    len(faces) * 3 +       # normal computation (once per triangle)
+    len(faces) * 3         # vertex updates (each triangle has 3 vertices)
+    )
+    step = 0
+
     # Build vertices list
-    vertices = [Vertex(coords=points[i], index=i) for i in range(len(points))]
-    
+    vertices = []
+    for i in range(len(points)):
+        vertices.append(Vertex(coords=points[i], index=i))
+        step += 1
+        if i % 100 == 0 and progress_callback:
+            percent = min(100, int((step / total_steps) * 100))
+            progress_callback(f"Building vertices... {percent}%")
+
     # Build triangles list
-    triangles = [Triangle(vertex_indices=face.tolist(), index=i) for i, face in enumerate(faces)]
-    
+    triangles = []
+    for i, face in enumerate(faces):
+        triangles.append(Triangle(vertex_indices=face.tolist(), index=i))
+        step += 1
+        if i % 100 == 0 and progress_callback:
+            percent = int((step / total_steps) * 100)
+            progress_callback(f"Building triangles... {percent}%")
+
     # Build edges dict to detect duplicates
     edge_dict = {}
     edges = []
-    
+
     for tri in triangles:
         vids = tri.vertex_indices
-        # For each edge opposite vertex i, edge i is opposite to vertex i
-        # so edges: edge0 opposite vertex0 connects vids[1], vids[2]
         edge_vertices = [
             (vids[1], vids[2]),
             (vids[2], vids[0]),
             (vids[0], vids[1]),
         ]
         for i, (v_start, v_end) in enumerate(edge_vertices):
-            # sort vertices so (min,max) to avoid duplicates with reversed order
             key = tuple(sorted((v_start, v_end)))
             if key in edge_dict:
                 edge_index = edge_dict[key]
@@ -60,14 +79,20 @@ def build_mesh_from_stl(file_path):
                 edges.append(edge)
                 edge_dict[key] = edge_index
                 tri.edge_indices[i] = edge_index
-    
+        step += 1
+    if progress_callback:
+        progress_callback("Building edges...")
+
     # Update valence and triangle indices in vertices
     for tri in triangles:
         for v_idx in tri.vertex_indices:
             vertices[v_idx].valence += 1
             vertices[v_idx].triangle_indices.append(tri.index)
-    
-    # Compute triangle normals (normalized cross product)
+        step += 1
+    if progress_callback:
+        progress_callback("Assigning triangle refs...")
+
+    # Compute triangle normals
     for tri in triangles:
         p0 = vertices[tri.vertex_indices[0]].coords
         p1 = vertices[tri.vertex_indices[1]].coords
@@ -77,5 +102,12 @@ def build_mesh_from_stl(file_path):
         n = np.cross(edge1, edge2)
         norm = np.linalg.norm(n)
         tri.normal = n / norm if norm > 0 else np.array([0,0,0])
-    
+        step += 1
+        if step % 200 == 0 and progress_callback:
+            percent = int((step / total_steps) * 100)
+            progress_callback(f"Computing normals... {percent}%")
+
+    if progress_callback:
+        progress_callback("✅ Structure complete (100%)")
+
     return vertices, edges, triangles
