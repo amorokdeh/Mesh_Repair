@@ -6,6 +6,7 @@ import mesh_io
 import viewer
 from mesh_export import save_mesh_to_json
 from mesh_data_structure import build_mesh_from_stl
+from mesh_sanity_check import sanity_check_mesh, generate_sanity_report
 
 def gui_load_and_view():
     root = tk.Tk()
@@ -23,13 +24,14 @@ def gui_load_and_view():
     menubar.add_cascade(label="Actions", menu=action_menu)
     action_menu.add_command(label="Build Datensstruktur", state='disabled', command=lambda: build_structure())
     action_menu.add_command(label="Export Mesh", state='disabled', command=lambda: export_mesh())
+    # New Sanity Check menu item, initially disabled
+    action_menu.add_command(label="Sanity Check Mesh", state='disabled', command=lambda: sanity_check())
 
     status_var = tk.StringVar()
     status_var.set("No mesh loaded")
     status_label = tk.Label(root, textvariable=status_var, font=("Arial", 10))
     status_label.pack(pady=(10, 0))
 
-    # Store last mesh loaded
     app_state = {
         "vertices": None,
         "edges": None,
@@ -67,6 +69,9 @@ def gui_load_and_view():
             messagebox.showinfo("Success", "Datensstruktur created successfully.")
 
             action_menu.entryconfig("Export Mesh", state="normal")
+            # Enable sanity check menu
+            action_menu.entryconfig("Sanity Check Mesh", state="normal")
+
             report_progress("✅ Datensstruktur ready")
 
         except Exception as e:
@@ -128,6 +133,7 @@ def gui_load_and_view():
                 # Enable buttons
                 action_menu.entryconfig("Build Datensstruktur", state="normal")
                 action_menu.entryconfig("Export Mesh", state="disabled")
+                action_menu.entryconfig("Sanity Check Mesh", state="disabled")  # Disabled until structure built
 
                 # Hide Load button
                 btn_load.pack_forget()
@@ -137,6 +143,43 @@ def gui_load_and_view():
                 status_var.set("❌ Load failed")
 
         threading.Thread(target=load).start()
+
+    def sanity_check():
+        if not app_state["vertices"]:
+            messagebox.showwarning("No Data", "Please build the structure first.")
+            return
+
+        def progress_update(msg):
+            status_var.set(f"🛠️ {msg}")
+            root.update_idletasks()
+
+        def run_check():
+            try:
+                results = sanity_check_mesh(
+                    app_state["vertices"],
+                    app_state["edges"],
+                    app_state["triangles"],
+                    progress_callback=progress_update
+                )
+
+                msg = generate_sanity_report(results)
+
+                status_var.set("✅ Sanity check done.")
+                messagebox.showinfo("Sanity Check Result", msg)
+
+                # Save the report to a file
+                try:
+                    with open("sanity_check_report.txt", "w", encoding="utf-8") as f:
+                        f.write(msg)
+                except Exception as e:
+                    messagebox.showwarning("Export Failed", f"Could not save report:\n{e}")
+
+            except Exception as e:
+                status_var.set("❌ Sanity check error")
+                messagebox.showerror("Error", f"Sanity check failed:\n{e}")
+
+
+        threading.Thread(target=run_check, daemon=True).start()
 
     btn_load = tk.Button(root, text="Load STL File", command=load_mesh, height=2, width=20)
     btn_load.pack(expand=True)
