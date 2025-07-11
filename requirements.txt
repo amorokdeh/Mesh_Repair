@@ -1,3 +1,4 @@
 pyvista
 numpy
 pyvistaqt
+numpy-stl
