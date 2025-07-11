@@ -4,3 +4,7 @@ mesh_data.json
 /__pycache__
 /__pycache__
 *.pyc
+exported_mesh.json
+/__pycache__
+__pycache__/gui.cpython-313.pyc
+__pycache__/mesh_data_structure.cpython-313.pyc
