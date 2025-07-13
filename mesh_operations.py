@@ -1,4 +1,3 @@
-# mesh_operations.py
 import numpy as np
 import pyvista as pv
 from math import acos, degrees
@@ -88,3 +87,69 @@ def edges_with_large_angle(edges, triangles, threshold_deg=30.0):
     angles = compute_dihedral_angles(edges, triangles)
     large_angle_edges = [e_idx for e_idx, angle in angles.items() if angle is not None and angle > threshold_deg]
     return large_angle_edges
+
+def triangle_aspect_ratio(p1, p2, p3):
+    """Compute the aspect ratio (quality) of a triangle: 4*sqrt(3)*Area / sum(length^2). Higher is better."""
+    a = np.linalg.norm(p2 - p1)
+    b = np.linalg.norm(p3 - p2)
+    c = np.linalg.norm(p1 - p3)
+    s = (a + b + c) / 2
+    area = max(np.sqrt(s * (s - a) * (s - b) * (s - c)), 1e-8)
+    return 4 * np.sqrt(3) * area / (a**2 + b**2 + c**2)
+
+
+def try_edge_flip(edge, vertices, edges, triangles):
+    """Try flipping an edge if it improves triangle quality. Returns True if flipped."""
+    if len(edge.triangles) != 2:
+        return False  # cannot flip boundary edge
+
+    t1_idx, t2_idx = edge.triangles
+    t1 = triangles[t1_idx]
+    t2 = triangles[t2_idx]
+
+    # Get the 4 unique vertices involved
+    v1, v2 = edge.v1, edge.v2
+    t1_other = [v for v in t1.vertex_indices if v != v1 and v != v2]
+    t2_other = [v for v in t2.vertex_indices if v != v1 and v != v2]
+
+    if len(t1_other) != 1 or len(t2_other) != 1:
+        return False  # degenerate triangle
+    a = t1_other[0]
+    b = t2_other[0]
+
+    # Before flip: triangles are (a,v1,v2) and (b,v2,v1)
+    p_a, p_b = vertices[a].coords, vertices[b].coords
+    p_v1, p_v2 = vertices[v1].coords, vertices[v2].coords
+
+    old_quality = min(
+        triangle_aspect_ratio(p_a, p_v1, p_v2),
+        triangle_aspect_ratio(p_b, p_v2, p_v1)
+    )
+    new_quality = min(
+        triangle_aspect_ratio(p_a, p_b, p_v1),
+        triangle_aspect_ratio(p_a, p_b, p_v2)
+    )
+
+    if new_quality <= old_quality:
+        return False  # no improvement
+
+    # ✅ Perform the flip: edge becomes (a, b)
+    edge.v1, edge.v2 = a, b
+
+    # Update triangles
+    triangles[t1_idx].vertex_indices = [a, b, v1]
+    triangles[t2_idx].vertex_indices = [b, a, v2]
+
+    triangles[t1_idx].recompute_normal(vertices)
+    triangles[t2_idx].recompute_normal(vertices)
+
+    return True
+
+
+def beautify_mesh(vertices, edges, triangles):
+    """Try flipping all edges to improve triangle quality."""
+    flip_count = 0
+    for edge in edges:
+        if try_edge_flip(edge, vertices, edges, triangles):
+            flip_count += 1
+    return flip_count

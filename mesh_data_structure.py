@@ -22,6 +22,18 @@ class Triangle:
         self.index = index
         self.normal = None
 
+    def recompute_normal(self, vertices):
+        v0 = vertices[self.vertex_indices[0]].coords
+        v1 = vertices[self.vertex_indices[1]].coords
+        v2 = vertices[self.vertex_indices[2]].coords
+
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        normal = np.cross(edge1, edge2)
+        norm = np.linalg.norm(normal)
+
+        self.normal = normal / norm if norm != 0 else np.array([0, 0, 0])
+
 # mesh_data_structure.py
 def build_mesh_from_stl(file_path, progress_callback=None):
     mesh = pv.read(file_path)

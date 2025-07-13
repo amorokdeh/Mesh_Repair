@@ -26,11 +26,10 @@ def gui_load_and_view():
     menubar.add_cascade(label="Actions", menu=action_menu)
     action_menu.add_command(label="Build Data Structure", state='disabled', command=lambda: build_structure())
     action_menu.add_command(label="Export Mesh", state='disabled', command=lambda: export_mesh())
-    # New Sanity Check menu item, initially disabled
     action_menu.add_command(label="Sanity Check Mesh", state='disabled', command=lambda: sanity_check())
     action_menu.add_command(label="Laplacian Smoothing", state='disabled', command=lambda: laplacian_smoothing_gui())
     action_menu.add_command(label="Highlight Sharp Edges", state='disabled', command=lambda: highlight_sharp_edges())
-    
+    action_menu.add_command(label="BeautiFill Mesh", state='disabled', command=lambda: beautify_mesh_gui())
 
     status_var = tk.StringVar()
     status_var.set("No mesh loaded")
@@ -74,10 +73,11 @@ def gui_load_and_view():
             messagebox.showinfo("Success", "Data Structure created successfully.")
 
             action_menu.entryconfig("Export Mesh", state="normal")
-            # Enable sanity check menu
             action_menu.entryconfig("Sanity Check Mesh", state="normal")
             action_menu.entryconfig("Laplacian Smoothing", state="normal")
             action_menu.entryconfig("Highlight Sharp Edges", state="normal")
+            action_menu.entryconfig("BeautiFill Mesh", state="normal")
+
 
 
             report_progress("✅ Data Structure ready")
@@ -162,7 +162,8 @@ def gui_load_and_view():
                 # Enable buttons
                 action_menu.entryconfig("Build Data Structure", state="normal")
                 action_menu.entryconfig("Export Mesh", state="disabled")
-                action_menu.entryconfig("Sanity Check Mesh", state="disabled")  # Disabled until structure built
+                action_menu.entryconfig("Sanity Check Mesh", state="disabled") 
+                action_menu.entryconfig("BeautiFill Mesh", state="disabled")
 
                 # Hide Load button
                 btn_load.config(state="disabled")
@@ -281,6 +282,34 @@ def gui_load_and_view():
             viewer.plot_mesh_with_highlights(app_state["vertices"], app_state["triangles"], sharp_edges, app_state["edges"])
 
         threading.Thread(target=run_view, daemon=True).start()
+
+    def beautify_mesh_gui():
+        if not app_state["vertices"]:
+            messagebox.showwarning("No Data", "Please build the structure first.")
+            return
+
+        def run_beautify():
+            from mesh_operations import beautify_mesh
+
+            status_var.set("🛠️ Beautifying mesh (edge flips)...")
+            root.update_idletasks()
+
+            flip_count = beautify_mesh(
+                app_state["vertices"],
+                app_state["edges"],
+                app_state["triangles"]
+            )
+
+            status_var.set(f"✅ Beautification complete. {flip_count} edges flipped.")
+            messagebox.showinfo("BeautiFill Result", f"Beautification done.\nEdges flipped: {flip_count}")
+
+            # Show updated mesh
+            def show_updated():
+                viewer.plot_mesh_from_data(app_state["vertices"], app_state["triangles"])
+
+            threading.Thread(target=show_updated, daemon=True).start()
+
+        threading.Thread(target=run_beautify, daemon=True).start()
 
     btn_load = tk.Button(root, text="Load STL File", command=load_mesh, height=2, width=20)
     btn_load.pack(expand=True)
