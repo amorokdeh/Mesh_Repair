@@ -278,7 +278,7 @@ def gui_load_and_view():
         # Launch PyVista viewer showing highlighted edges
         def run_view():
             import viewer
-            viewer.plot_mesh_with_highlights(app_state["vertices"], app_state["triangles"], sharp_edges)
+            viewer.plot_mesh_with_highlights(app_state["vertices"], app_state["triangles"], sharp_edges, app_state["edges"])
 
         threading.Thread(target=run_view, daemon=True).start()
 

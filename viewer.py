@@ -63,7 +63,7 @@ def plot_mesh_from_data(vertices, triangles, highlight_edges=None, edges=None):
     plotter.camera_position = 'iso'
     plotter.show()
 
-def plot_mesh_with_highlights(vertices, triangles, highlight_edge_indices):
+def plot_mesh_with_highlights(vertices, triangles, highlight_edge_indices, edges):
     points = np.array([v.coords for v in vertices])  # convert objects to coords
     faces = []
     for t in triangles:

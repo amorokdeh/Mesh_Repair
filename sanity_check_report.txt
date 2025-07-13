@@ -1,76 +1,224 @@
-✅ Mesh passed the basic validity checks.
+❌ Mesh failed validity checks.
 
+Errors:
+Edge 22059 belongs to more than 2 triangles (4).
+Edge 22060 belongs to more than 2 triangles (4).
+Edge 22155 belongs to more than 2 triangles (4).
+Edge 66081 belongs to more than 2 triangles (4).
+Edge 211525 belongs to more than 2 triangles (4).
+Edge 211526 belongs to more than 2 triangles (4).
+Edge 211529 belongs to more than 2 triangles (4).
+Edge 231401 belongs to more than 2 triangles (4).
+Edge 232876 belongs to more than 2 triangles (4).
+Edge 232877 belongs to more than 2 triangles (4).
+Edge 232880 belongs to more than 2 triangles (4).
+Edge 252475 belongs to more than 2 triangles (4).
+Edge 754661 belongs to more than 2 triangles (4).
+Edge 1027493 belongs to more than 2 triangles (4).
+Edge 1027494 belongs to more than 2 triangles (4).
+Edge 1027497 belongs to more than 2 triangles (4).
+Edge 1072929 belongs to more than 2 triangles (4).
+Edge 1082713 belongs to more than 2 triangles (4).
+Edge 1082714 belongs to more than 2 triangles (4).
+Edge 1082776 belongs to more than 2 triangles (4).
+Edge 1130217 belongs to more than 2 triangles (4).
+Edge 1350203 belongs to more than 2 triangles (4).
+Edge 1400994 belongs to more than 2 triangles (4).
+Edge 1400995 belongs to more than 2 triangles (4).
+Edge 1401066 belongs to more than 2 triangles (4).
+Edge 1446383 belongs to more than 2 triangles (4).
+Edge 1571833 belongs to more than 2 triangles (4).
+Edge 1571834 belongs to more than 2 triangles (4).
+Edge 1572139 belongs to more than 2 triangles (4).
+Edge 1618840 belongs to more than 2 triangles (4).
+Edge 1632422 belongs to more than 2 triangles (4).
+Edge 1632424 belongs to more than 2 triangles (4).
+Edge 1632426 belongs to more than 2 triangles (4).
+Edge 1656582 belongs to more than 2 triangles (4).
+Edge 1656583 belongs to more than 2 triangles (4).
+Edge 1656692 belongs to more than 2 triangles (4).
+Edge 1673630 belongs to more than 2 triangles (4).
+Edge 1673631 belongs to more than 2 triangles (4).
+Edge 1673674 belongs to more than 2 triangles (4).
+Edge 1679528 belongs to more than 2 triangles (4).
+Edge 1702673 belongs to more than 2 triangles (4).
+Edge 1718222 belongs to more than 2 triangles (4).
+Edge 1878366 belongs to more than 2 triangles (4).
+Edge 1878368 belongs to more than 2 triangles (4).
+Edge 1878370 belongs to more than 2 triangles (4).
+Edge 1894313 belongs to more than 2 triangles (4).
+Edge 1894315 belongs to more than 2 triangles (4).
+Edge 1894577 belongs to more than 2 triangles (4).
+Edge 1940765 belongs to more than 2 triangles (4).
+Edge 1957124 belongs to more than 2 triangles (4).
+Edge 1989123 belongs to more than 2 triangles (4).
+Edge 1989124 belongs to more than 2 triangles (4).
+Edge 1989438 belongs to more than 2 triangles (4).
+Edge 2009059 belongs to more than 2 triangles (4).
+Edge 2009060 belongs to more than 2 triangles (4).
+Edge 2009383 belongs to more than 2 triangles (4).
+Edge 2058655 belongs to more than 2 triangles (4).
+Edge 2082763 belongs to more than 2 triangles (4).
+Edge 2249662 belongs to more than 2 triangles (4).
+Edge 2249664 belongs to more than 2 triangles (4).
+Edge 2249666 belongs to more than 2 triangles (4).
+Edge 2304188 belongs to more than 2 triangles (4).
+Edge 2440935 belongs to more than 2 triangles (4).
+Edge 2440936 belongs to more than 2 triangles (4).
+Edge 2440939 belongs to more than 2 triangles (4).
+Edge 2511489 belongs to more than 2 triangles (4).
+Edge 2565951 belongs to more than 2 triangles (4).
+Edge 2565952 belongs to more than 2 triangles (4).
+Edge 2566820 belongs to more than 2 triangles (4).
+Edge 2634985 belongs to more than 2 triangles (4).
+Edge 2687031 belongs to more than 2 triangles (4).
+Edge 2687032 belongs to more than 2 triangles (4).
+Edge 2687145 belongs to more than 2 triangles (4).
+Edge 2737984 belongs to more than 2 triangles (4).
+Edge 2869776 belongs to more than 2 triangles (4).
+Edge 2869777 belongs to more than 2 triangles (4).
+Edge 2869846 belongs to more than 2 triangles (4).
+Edge 2885638 belongs to more than 2 triangles (4).
+Edge 2885639 belongs to more than 2 triangles (4).
+Edge 2885772 belongs to more than 2 triangles (4).
+Edge 2915292 belongs to more than 2 triangles (4).
+Edge 2930066 belongs to more than 2 triangles (4).
+Edge 3198537 belongs to more than 2 triangles (4).
+Edge 3198539 belongs to more than 2 triangles (4).
+Edge 3198543 belongs to more than 2 triangles (4).
+Edge 3241871 belongs to more than 2 triangles (4).
+Edge 3264935 belongs to more than 2 triangles (4).
+Edge 3264936 belongs to more than 2 triangles (4).
+Edge 3265009 belongs to more than 2 triangles (4).
+Edge 3302915 belongs to more than 2 triangles (4).
+Edge 3599835 belongs to more than 2 triangles (4).
+Edge 3599836 belongs to more than 2 triangles (4).
+Edge 3599838 belongs to more than 2 triangles (4).
+Edge 3626943 belongs to more than 2 triangles (4).
+Edge 3753832 belongs to more than 2 triangles (4).
+Edge 3753833 belongs to more than 2 triangles (4).
+Edge 3753854 belongs to more than 2 triangles (4).
+Edge 3774941 belongs to more than 2 triangles (4).
+Edge 3775368 belongs to more than 2 triangles (4).
 Warnings:
-Vertex 271382 has valence 2 < 3.
-Vertex 271392 has valence 2 < 3.
-Vertex 285907 has valence 1 < 3.
-Vertex 301016 has valence 2 < 3.
-Vertex 301046 has valence 2 < 3.
-Vertex 301058 has valence 2 < 3.
-Vertex 316731 has valence 2 < 3.
-Vertex 316774 has valence 2 < 3.
-Vertex 316793 has valence 2 < 3.
-Vertex 316796 has valence 2 < 3.
-Vertex 316800 has valence 2 < 3.
-Vertex 332346 has valence 2 < 3.
-Vertex 332368 has valence 2 < 3.
-Vertex 348412 has valence 2 < 3.
-Vertex 348468 has valence 2 < 3.
-Vertex 348470 has valence 2 < 3.
-Vertex 348473 has valence 2 < 3.
-Vertex 363786 has valence 2 < 3.
-Vertex 363837 has valence 2 < 3.
-Vertex 379563 has valence 2 < 3.
-Vertex 639223 has valence 2 < 3.
-Vertex 639286 has valence 2 < 3.
-Vertex 660370 has valence 1 < 3.
-Vertex 660421 has valence 2 < 3.
-Vertex 682980 has valence 2 < 3.
-Vertex 683334 has valence 2 < 3.
-Vertex 683346 has valence 2 < 3.
-Vertex 683348 has valence 2 < 3.
-Vertex 734758 has valence 2 < 3.
-Vertex 734913 has valence 1 < 3.
-Vertex 734917 has valence 2 < 3.
-Vertex 754910 has valence 2 < 3.
-Vertex 755105 has valence 2 < 3.
-Vertex 782463 has valence 2 < 3.
-Vertex 782464 has valence 2 < 3.
-Vertex 782467 has valence 2 < 3.
-Vertex 799956 has valence 2 < 3.
-Vertex 799959 has valence 2 < 3.
-Vertex 841724 has valence 2 < 3.
-Vertex 841725 has valence 2 < 3.
-Vertex 841728 has valence 2 < 3.
-Vertex 841730 has valence 1 < 3.
-Vertex 872394 has valence 2 < 3.
-Vertex 872396 has valence 2 < 3.
-Vertex 872423 has valence 1 < 3.
-Vertex 872424 has valence 2 < 3.
-Vertex 872939 has valence 2 < 3.
-Vertex 892712 has valence 2 < 3.
-Vertex 893292 has valence 2 < 3.
-Vertex 909839 has valence 2 < 3.
-Vertex 925725 has valence 1 < 3.
-Vertex 925727 has valence 2 < 3.
-Vertex 942484 has valence 2 < 3.
-Vertex 942486 has valence 2 < 3.
-Vertex 942487 has valence 2 < 3.
-Vertex 956941 has valence 2 < 3.
-Vertex 957455 has valence 2 < 3.
-Vertex 1159623 has valence 1 < 3.
-Vertex 1175266 has valence 2 < 3.
-Vertex 1222358 has valence 2 < 3.
-Vertex 1222541 has valence 2 < 3.
-Vertex 1222627 has valence 1 < 3.
-Vertex 1231071 has valence 2 < 3.
-Vertex 1239742 has valence 2 < 3.
-Vertex 1239783 has valence 2 < 3.
-Euler characteristic V - E + F = 2283 (expected 2 for closed manifold).
-Vertex 872397 has 4 boundary edges (max 2 expected).
+Vertex 93058 has valence 0 < 3.
+Vertex 93059 has valence 0 < 3.
+Vertex 106937 has valence 0 < 3.
+Vertex 106938 has valence 0 < 3.
+Vertex 107410 has valence 0 < 3.
+Vertex 127822 has valence 0 < 3.
+Vertex 190214 has valence 0 < 3.
+Vertex 190215 has valence 0 < 3.
+Vertex 190217 has valence 0 < 3.
+Vertex 255234 has valence 2 < 3.
+Vertex 267752 has valence 2 < 3.
+Vertex 271368 has valence 2 < 3.
+Vertex 271378 has valence 2 < 3.
+Vertex 285893 has valence 1 < 3.
+Vertex 301002 has valence 2 < 3.
+Vertex 301032 has valence 2 < 3.
+Vertex 301044 has valence 2 < 3.
+Vertex 316717 has valence 2 < 3.
+Vertex 316760 has valence 2 < 3.
+Vertex 316779 has valence 2 < 3.
+Vertex 316782 has valence 2 < 3.
+Vertex 316786 has valence 2 < 3.
+Vertex 332332 has valence 2 < 3.
+Vertex 332354 has valence 2 < 3.
+Vertex 348397 has valence 2 < 3.
+Vertex 348453 has valence 2 < 3.
+Vertex 348455 has valence 2 < 3.
+Vertex 348458 has valence 2 < 3.
+Vertex 363771 has valence 2 < 3.
+Vertex 363822 has valence 2 < 3.
+Vertex 379547 has valence 2 < 3.
+Vertex 425131 has valence 0 < 3.
+Vertex 425132 has valence 0 < 3.
+Vertex 440000 has valence 0 < 3.
+Vertex 453905 has valence 2 < 3.
+Vertex 465851 has valence 0 < 3.
+Vertex 465852 has valence 0 < 3.
+Vertex 465853 has valence 0 < 3.
+Vertex 466067 has valence 2 < 3.
+Vertex 502736 has valence 0 < 3.
+Vertex 502737 has valence 0 < 3.
+Vertex 517692 has valence 0 < 3.
+Vertex 594694 has valence 0 < 3.
+Vertex 594695 has valence 0 < 3.
+Vertex 611542 has valence 0 < 3.
+Vertex 639186 has valence 2 < 3.
+Vertex 639249 has valence 2 < 3.
+Vertex 657808 has valence 0 < 3.
+Vertex 657809 has valence 0 < 3.
+Vertex 660330 has valence 1 < 3.
+Vertex 660381 has valence 2 < 3.
+Vertex 680367 has valence 0 < 3.
+Vertex 682938 has valence 2 < 3.
+Vertex 683222 has valence 0 < 3.
+Vertex 683223 has valence 0 < 3.
+Vertex 683289 has valence 2 < 3.
+Vertex 683301 has valence 2 < 3.
+Vertex 683303 has valence 2 < 3.
+Vertex 709155 has valence 0 < 3.
+Vertex 734713 has valence 2 < 3.
+Vertex 734868 has valence 1 < 3.
+Vertex 734872 has valence 2 < 3.
+Vertex 754865 has valence 2 < 3.
+Vertex 755060 has valence 2 < 3.
+Vertex 771799 has valence 0 < 3.
+Vertex 782413 has valence 2 < 3.
+Vertex 782414 has valence 2 < 3.
+Vertex 782417 has valence 2 < 3.
+Vertex 784851 has valence 0 < 3.
+Vertex 784852 has valence 0 < 3.
+Vertex 794666 has valence 0 < 3.
+Vertex 799898 has valence 2 < 3.
+Vertex 799901 has valence 2 < 3.
+Vertex 801894 has valence 0 < 3.
+Vertex 841664 has valence 2 < 3.
+Vertex 841665 has valence 2 < 3.
+Vertex 841668 has valence 2 < 3.
+Vertex 841670 has valence 1 < 3.
+Vertex 872333 has valence 2 < 3.
+Vertex 872335 has valence 2 < 3.
+Vertex 872362 has valence 1 < 3.
+Vertex 872363 has valence 2 < 3.
+Vertex 872878 has valence 2 < 3.
+Vertex 892651 has valence 2 < 3.
+Vertex 893231 has valence 2 < 3.
+Vertex 909777 has valence 2 < 3.
+Vertex 925663 has valence 1 < 3.
+Vertex 925665 has valence 2 < 3.
+Vertex 942422 has valence 2 < 3.
+Vertex 942424 has valence 2 < 3.
+Vertex 942425 has valence 2 < 3.
+Vertex 956879 has valence 2 < 3.
+Vertex 957393 has valence 2 < 3.
+Vertex 1027447 has valence 0 < 3.
+Vertex 1027448 has valence 0 < 3.
+Vertex 1038691 has valence 0 < 3.
+Vertex 1074596 has valence 0 < 3.
+Vertex 1159549 has valence 1 < 3.
+Vertex 1175192 has valence 2 < 3.
+Vertex 1222283 has valence 2 < 3.
+Vertex 1222466 has valence 2 < 3.
+Vertex 1222552 has valence 1 < 3.
+Vertex 1230996 has valence 2 < 3.
+Vertex 1239667 has valence 2 < 3.
+Vertex 1239708 has valence 2 < 3.
+Vertex 1262601 has valence 2 < 3.
+Vertex 1270037 has valence 2 < 3.
+Vertex 1295348 has valence 0 < 3.
+Vertex 1295349 has valence 0 < 3.
+Vertex 1302118 has valence 0 < 3.
+Vertex 1318370 has valence 0 < 3.
+Vertex 1318371 has valence 0 < 3.
+Vertex 1318385 has valence 0 < 3.
+Euler characteristic V - E + F = 2368 (expected 2 for closed manifold).
+Vertex 872336 has 4 boundary edges (max 2 expected).
 Found 21 hole(s) in the mesh.
 
-Euler characteristic (V - E + F): 2283
+Euler characteristic (V - E + F): 2368
 
 Detected 21 hole(s):
   Hole 1: 29 edges, 29 vertices
