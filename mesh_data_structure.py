@@ -67,9 +67,9 @@ def build_mesh_from_stl(file_path, progress_callback=None):
             percent = int((step / total_steps) * 100)
             progress_callback(f"Building triangles... {percent}%")
 
-    # Build edges dict to detect duplicates
-    edge_dict = {}
-    edges = []
+    # Build Unique Edges and Link to Triangles
+    edge_dict = {}  # Helps avoid duplicate edge creation
+    edges = []  # List of unique Edge instances
 
     for tri in triangles:
         vids = tri.vertex_indices
@@ -79,12 +79,14 @@ def build_mesh_from_stl(file_path, progress_callback=None):
             (vids[0], vids[1]),
         ]
         for i, (v_start, v_end) in enumerate(edge_vertices):
-            key = tuple(sorted((v_start, v_end)))
+            key = tuple(sorted((v_start, v_end))) # Sort to ensure uniqueness (undirected edge)
             if key in edge_dict:
+                # Edge already exists, reuse it
                 edge_index = edge_dict[key]
                 edges[edge_index].triangles.append(tri.index)
                 tri.edge_indices[i] = edge_index
             else:
+                # Create new edge and assign it
                 edge_index = len(edges)
                 edge = Edge(v1=key[0], v2=key[1])
                 edge.triangles.append(tri.index)
@@ -95,16 +97,16 @@ def build_mesh_from_stl(file_path, progress_callback=None):
     if progress_callback:
         progress_callback("Building edges...")
 
-    # Update valence and triangle indices in vertices
+    # Update Vertex Data with Triangle Relationships
     for tri in triangles:
         for v_idx in tri.vertex_indices:
-            vertices[v_idx].valence += 1
-            vertices[v_idx].triangle_indices.append(tri.index)
+            vertices[v_idx].valence += 1  # Increase how many triangles touch this vertex
+            vertices[v_idx].triangle_indices.append(tri.index) # Store triangle ID
         step += 1
     if progress_callback:
         progress_callback("Assigning triangle refs...")
 
-    # Compute triangle normals
+    # Compute Triangle Surface Normals
     for tri in triangles:
         p0 = vertices[tri.vertex_indices[0]].coords
         p1 = vertices[tri.vertex_indices[1]].coords

@@ -1,35 +1,38 @@
 from collections import defaultdict, deque
 
+# Performs a set of checks to validate and diagnose potential issues in a mesh
 def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
     results = {
-        "valid": True,
-        "errors": [],
-        "warnings": [],
-        "holes": [],
-        "euler_check": None,
+        "valid": True,      # Overall validity of the mesh
+        "errors": [],       # Critical issues that invalidate the mesh
+        "warnings": [],     # Non-fatal anomalies or quality concerns
+        "holes": [],        # List of holes found (if any)
+        "euler_check": None # Result of Euler characteristic check (V - E + F)
     }
 
     def report(msg):
         if progress_callback:
             progress_callback(msg)
 
-    # --- 1. Check edges ---
+    # --- 1. Check edge connectivity (how many triangles each edge is part of)---
     report("Checking edges...")
     for i, edge in enumerate(edges):
         count_tri = len(edge.triangles)
         if count_tri > 2:
+            # Each edge should be shared by at most two triangles (manifold constraint)
             results["valid"] = False
             results["errors"].append(f"Edge {i} belongs to more than 2 triangles ({count_tri}).")
-
+    # Collect edges with only one adjacent triangle → these are boundary edges
     boundary_edges = [i for i, e in enumerate(edges) if len(e.triangles) == 1]
 
-    # --- 2. Check valence ---
+    # --- 2. Check vertex valence (how many triangles each vertex is part of) ---
     report("Checking vertex valence...")
     for i, v in enumerate(vertices):
         if v.valence < 3:
+            # A very low valence may indicate an isolated or weakly connected vertex
             results["warnings"].append(f"Vertex {i} has valence {v.valence} < 3.")
 
-    # --- 3. Check duplicate points ---
+    # --- 3. Check for duplicate vertices (same coordinates) ---
     report("Checking for duplicate vertices...")
     seen_coords = set()
     duplicates = 0
@@ -43,7 +46,7 @@ def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
         results["valid"] = False
         results["errors"].append(f"Found {duplicates} duplicate vertex coordinates.")
 
-    # --- 4. Euler's formula ---
+    # --- 4. Check Euler characteristic: V - E + F ---
     report("Checking Euler characteristic...")
     V = len(vertices)
     E = len(edges)
@@ -51,26 +54,32 @@ def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
     euler_value = V - E + F
     results["euler_check"] = euler_value
     if euler_value != 2:
+        # A different value often means the mesh has holes or is not a closed surface
         results["warnings"].append(f"Euler characteristic V - E + F = {euler_value} (expected 2 for closed manifold).")
 
-    # --- 5. Check holes ---
+    # --- 5. Detect boundary loops (holes) in the mesh ---
     report("Checking for holes in the mesh...")
+
+    # Count how many boundary edges touch each vertex
     vertex_to_boundary_edges = {i: 0 for i in range(V)}
     for e_idx in boundary_edges:
         edge = edges[e_idx]
         vertex_to_boundary_edges[edge.v1] += 1
         vertex_to_boundary_edges[edge.v2] += 1
-
+   
+    # If a vertex is touched by more than 2 boundary edges, it may indicate a non-manifold or irregular hole
     for v_idx, count in vertex_to_boundary_edges.items():
         if count > 2:
             results["warnings"].append(f"Vertex {v_idx} has {count} boundary edges (max 2 expected).")
 
+    # Build a connectivity graph of boundary edges
     adjacency = defaultdict(list)
     for e_idx in boundary_edges:
         edge = edges[e_idx]
         adjacency[edge.v1].append(edge.v2)
         adjacency[edge.v2].append(edge.v1)
 
+    # Use BFS(Breadth-First Search) to find connected components (i.e., separate boundary loops or holes)
     visited_vertices = set()
     holes = []
 
@@ -92,7 +101,7 @@ def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
                     queue.append(nbr)
                 hole_edges_count += 1
 
-        hole_edges_count = hole_edges_count // 2
+        hole_edges_count = hole_edges_count // 2 # Each edge is counted twice (once per direction)
         holes.append({
             "vertices_count": len(hole_vertices),
             "edges_count": hole_edges_count
@@ -106,6 +115,7 @@ def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
     report("Sanity check completed.")
     return results
 
+# Converts the results dictionary into a human-readable text summary
 def generate_sanity_report(results):
     lines = []
 

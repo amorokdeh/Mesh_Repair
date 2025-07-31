@@ -83,3 +83,48 @@ def plot_mesh_with_highlights(vertices, triangles, highlight_edge_indices, edges
     plotter.hide_axes()
     plotter.camera_position = 'iso'
     plotter.show()
+
+def plot_point_and_closest_on_mesh(vertices, triangles, input_point, closest_point):
+
+    """
+    Visualize mesh, input point, and closest point on mesh.
+    """
+
+    if len(vertices) > 0 and hasattr(vertices[0], "coords"):
+        points = np.array([v.coords for v in vertices])
+    else:
+        points = np.array(vertices)
+
+    faces = []
+    for t in triangles:
+        if hasattr(t, "vertex_indices"):
+            indices = t.vertex_indices
+        else:
+            indices = t
+        faces.extend([3] + list(indices))
+    faces = np.array(faces)
+
+    mesh = pv.PolyData(points, faces)
+
+    plotter = pv.Plotter()
+    plotter.set_background('#1e1e1e')
+
+    plotter.add_mesh(mesh, color='#ccf5ff', show_edges=True, edge_color='#001f3f', opacity=0.7)
+
+  # Add input point (red) and closest point (green) with larger radius for visibility
+    sphere_radius = 0.01 * np.linalg.norm(points.max(axis=0) - points.min(axis=0))  # scale with model size
+    input_sphere = pv.Sphere(radius=sphere_radius, center=input_point)
+    closest_sphere = pv.Sphere(radius=sphere_radius, center=closest_point)
+
+    plotter.add_mesh(input_sphere, color='red', label='Input Point')
+    plotter.add_mesh(closest_sphere, color='green', label='Closest Point on Mesh')
+
+    # Add a legend
+    plotter.add_legend([('Input Point', 'red'), ('Closest Point on Mesh', 'green')])
+
+    # Add orientation aids
+    plotter.show_bounds(grid='front', location='outer', color='white')
+    plotter.show_axes()
+
+    plotter.camera_position = 'iso'
+    plotter.show()
