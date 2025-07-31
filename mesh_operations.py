@@ -68,7 +68,6 @@ def point_to_mesh_distance(point, vertices, triangles):
     # Query closest point on the mesh surface
     closest_point_id = mesh.find_closest_point(point)
     closest_point = mesh.points[closest_point_id]
-    dist = np.linalg.norm(point - closest_point)
     return dist, closest_point
 
 # Compute angle between adjacent triangles across each edge
