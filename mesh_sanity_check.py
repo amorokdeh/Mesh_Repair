@@ -52,11 +52,13 @@ def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
     E = len(edges)
     F = len(triangles)
     euler_value = V - E + F
-    results["euler_check"] = euler_value
-    if euler_value != 2:
-        # A different value often means the mesh has holes or is not a closed surface
-        results["warnings"].append(f"Euler characteristic V - E + F = {euler_value} (expected 2 for closed manifold).")
+    genus = (2 - euler_value) // 2 if (2 - euler_value) % 2 == 0 else (2 - euler_value) / 2
 
+    if euler_value != 2:
+        results["warnings"].append(
+            f"Euler characteristic V - E + F = {euler_value} → genus = {genus} "
+            f"(expected χ=2, g=0 for closed sphere-like manifold)."
+        )
     # --- 5. Detect boundary loops (holes) in the mesh ---
     report("Checking for holes in the mesh...")
 
@@ -131,8 +133,6 @@ def generate_sanity_report(results):
     if results["warnings"]:
         lines.append("Warnings:")
         lines.extend(results["warnings"])
-
-    lines.append(f"\nEuler characteristic (V - E + F): {results['euler_check']}")
 
     if results["holes"]:
         lines.append(f"\nDetected {len(results['holes'])} hole(s):")
