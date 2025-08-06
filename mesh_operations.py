@@ -50,6 +50,53 @@ def laplacian_smoothing(vertices, edges, triangles, iterations=1, lambda_factor=
             vertices[i] = coords[i]
     return vertices, diff_vectors
 
+def taubin_smoothing(vertices, edges, triangles, iterations=10, lambda_factor=0.5, mu_factor=-0.53):
+    """
+    Apply Taubin smoothing to the mesh.
+    Parameters:
+        vertices: list of Vertex objects
+        edges: list of Edge objects
+        triangles: list of Triangle objects
+        iterations: number of (lambda+mu) smoothing cycles
+        lambda_factor: smoothing factor for Laplacian step
+        mu_factor: inverse smoothing factor to reduce shrinkage
+    Returns:
+        updated vertex list and final displacement vectors
+    """
+    if len(vertices) == 0:
+        return vertices, np.array([])
+
+    V = len(vertices)
+    coords = np.array([v.coords for v in vertices])
+    original_coords = coords.copy()
+
+    # Build adjacency list
+    adjacency = [[] for _ in range(V)]
+    for edge in edges:
+        v1, v2 = edge.v1, edge.v2
+        adjacency[v1].append(v2)
+        adjacency[v2].append(v1)
+
+    def laplacian_step(coords, factor):
+        new_coords = coords.copy()
+        for i in range(V):
+            neighbors = adjacency[i]
+            if not neighbors:
+                continue
+            avg = np.mean(coords[neighbors], axis=0)
+            new_coords[i] += factor * (avg - coords[i])
+        return new_coords
+
+    for _ in range(iterations):
+        coords = laplacian_step(coords, lambda_factor)
+        coords = laplacian_step(coords, mu_factor)
+
+    # Update vertex objects
+    for i in range(V):
+        vertices[i].coords = coords[i]
+
+    diff_vectors = coords - original_coords
+    return vertices, diff_vectors
 
 # Compute shortest distance from a point to the mesh surface
 def point_to_mesh_distance(point, vertices, triangles):
@@ -68,6 +115,7 @@ def point_to_mesh_distance(point, vertices, triangles):
     # Query closest point on the mesh surface
     closest_point_id = mesh.find_closest_point(point)
     closest_point = mesh.points[closest_point_id]
+    dist = np.linalg.norm(point - closest_point)
     return dist, closest_point
 
 # Compute angle between adjacent triangles across each edge

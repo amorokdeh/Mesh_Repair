@@ -1,8 +1,6 @@
 ✅ Mesh passed the basic validity checks.
 
 Warnings:
-Euler characteristic V - E + F = -6300 (expected 2 for closed manifold).
+Euler characteristic V - E + F = -3436 → genus = 1719 (expected χ=2, g=0 for closed sphere-like manifold).
 
-Euler characteristic (V - E + F): -6300
-
-Sanity check runtime: 1.599478 seconds
+Sanity check runtime: 0.647114 seconds

@@ -11,7 +11,7 @@ import copy
 from mesh_export import save_mesh_to_json, save_mesh_to_stl
 from mesh_data_structure import build_mesh_from_stl
 from mesh_sanity_check import sanity_check_mesh, generate_sanity_report
-from mesh_operations import laplacian_smoothing, point_to_mesh_distance
+from mesh_operations import laplacian_smoothing, taubin_smoothing,point_to_mesh_distance
 from mesh_operations import  compute_dihedral_angles
 from mesh_operations import MeshOperations
 from tkinter import simpledialog
@@ -35,6 +35,7 @@ def gui_load_and_view():
     action_menu.add_command(label="Export Mesh", state='disabled', command=lambda: export_mesh())
     action_menu.add_command(label="Sanity Check Mesh", state='disabled', command=lambda: sanity_check())
     action_menu.add_command(label="Laplacian Smoothing", state='disabled', command=lambda: laplacian_smoothing_gui())
+    action_menu.add_command(label="Taubin Smoothing", state='disabled', command=lambda: taubin_smoothing_gui())
     action_menu.add_command(label="Compute Dihedral Angles", state='disabled', command=lambda: compute_dihedral_angles())
     action_menu.add_command(label="Compute Point-Mesh Distance", state='disabled', command=lambda: compute_point_mesh_distance_gui())
 
@@ -87,6 +88,7 @@ def gui_load_and_view():
             action_menu.entryconfig("Export Mesh", state="normal")
             action_menu.entryconfig("Sanity Check Mesh", state="normal")
             action_menu.entryconfig("Laplacian Smoothing", state="normal")
+            action_menu.entryconfig("Taubin Smoothing", state='normal')
             action_menu.entryconfig("Compute Dihedral Angles", state="normal") 
             action_menu.entryconfig("Compute Point-Mesh Distance", state="normal")
 
@@ -277,6 +279,59 @@ def gui_load_and_view():
 
 
         threading.Thread(target=run_smoothing, daemon=True).start()
+
+    def taubin_smoothing_gui():
+        if not app_state["vertices"]:
+            messagebox.showwarning("No Data", "Please build the structure first.")
+            return
+
+        iterations = sd.askinteger("Taubin Smoothing", "Number of iterations:", minvalue=1, maxvalue=100, initialvalue=10)
+        if iterations is None:
+            return
+        lambda_factor = sd.askfloat("Lambda (positive)", "Enter λ (e.g., 0.5):", minvalue=0.0, maxvalue=1.0, initialvalue=0.5)
+        if lambda_factor is None:
+            return
+        mu_factor = sd.askfloat("Mu (negative)", "Enter μ (e.g., -0.53):", maxvalue=0.0, initialvalue=-0.53)
+        if mu_factor is None:
+            return
+
+        def run_taubin():
+            status_var.set("🛠️ Applying Taubin smoothing...")
+            root.update_idletasks()
+
+            start = time.time()
+            if "original_vertices" not in app_state:
+                app_state["original_vertices"] = copy.deepcopy(app_state["vertices"])
+            
+            from mesh_operations import taubin_smoothing
+            vertices, diff_vectors = taubin_smoothing(
+                app_state["vertices"],
+                app_state["edges"],
+                app_state["triangles"],
+                iterations=iterations,
+                lambda_factor=lambda_factor,
+                mu_factor=mu_factor
+            )
+            app_state["vertices"] = vertices
+            end = time.time()
+            runtime = end - start
+
+            moved_distances = np.linalg.norm(diff_vectors, axis=1)
+            max_move = moved_distances.max()
+
+            messagebox.showinfo(
+                "Taubin Smoothing", 
+                f"Smoothing done.\nMax vertex move: {max_move:.4f}\nRuntime: {runtime:.6f} seconds"
+            )
+
+            status_var.set("✅ Taubin smoothing complete.")
+
+            def show_updated():
+                viewer.plot_mesh_from_data(app_state["vertices"], app_state["triangles"])
+
+            threading.Thread(target=show_updated, daemon=True).start()
+
+        threading.Thread(target=run_taubin, daemon=True).start()
 
     def compute_point_mesh_distance_gui():
         if not app_state["vertices"]:
