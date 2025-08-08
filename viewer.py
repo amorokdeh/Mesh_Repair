@@ -128,3 +128,49 @@ def plot_point_and_closest_on_mesh(vertices, triangles, input_point, closest_poi
 
     plotter.camera_position = 'iso'
     plotter.show()
+    
+def plot_mesh_with_vertex_mask(vertices, triangles, mask, cable_color='red', mesh_color='#ccf5ff'):
+    """
+    Plot the mesh, coloring masked vertices with cable_color and others with mesh_color.
+    vertices: list of Vertex objects or Nx3 numpy array
+    triangles: list of Triangle objects or array of triangle indices
+    mask: boolean array of length len(vertices)
+    """
+    import numpy as np
+    import pyvista as pv
+
+    # Get Nx3 coords
+    if len(vertices) > 0 and hasattr(vertices[0], "coords"):
+        points = np.array([v.coords for v in vertices])
+    else:
+        points = np.array(vertices)
+
+    # Build faces array for PyVista
+    faces = []
+    for t in triangles:
+        if hasattr(t, "vertex_indices"):
+            indices = t.vertex_indices
+        else:
+            indices = t
+        faces.extend([3] + list(indices))
+    faces = np.array(faces)
+
+    mesh = pv.PolyData(points, faces)
+
+    # Build per-vertex colors
+    # Convert cable_color and mesh_color to RGB
+    cable_rgb = np.array(pv.Color(cable_color).int_rgb) / 255.0
+    mesh_rgb = np.array(pv.Color(mesh_color).int_rgb) / 255.0
+
+    colors = np.zeros((len(vertices), 3))
+    colors[mask] = cable_rgb
+    colors[~mask] = mesh_rgb
+
+    mesh.point_data['colors'] = colors
+
+    plotter = pv.Plotter()
+    plotter.set_background('#1e1e1e')
+    plotter.add_mesh(mesh, scalars='colors', rgb=True, show_edges=True, edge_color='#001f3f')
+    plotter.hide_axes()
+    plotter.camera_position = 'iso'
+    plotter.show()

@@ -36,6 +36,7 @@ def gui_load_and_view():
     action_menu.add_command(label="Sanity Check Mesh", state='disabled', command=lambda: sanity_check())
     action_menu.add_command(label="Laplacian Smoothing", state='disabled', command=lambda: laplacian_smoothing_gui())
     action_menu.add_command(label="Taubin Smoothing", state='disabled', command=lambda: taubin_smoothing_gui())
+    action_menu.add_command(label="Detect And Smooth Cables", state='disabled', command=lambda: detect_and_smooth_cables())
     action_menu.add_command(label="Compute Dihedral Angles", state='disabled', command=lambda: compute_dihedral_angles())
     action_menu.add_command(label="Compute Point-Mesh Distance", state='disabled', command=lambda: compute_point_mesh_distance_gui())
 
@@ -89,6 +90,7 @@ def gui_load_and_view():
             action_menu.entryconfig("Sanity Check Mesh", state="normal")
             action_menu.entryconfig("Laplacian Smoothing", state="normal")
             action_menu.entryconfig("Taubin Smoothing", state='normal')
+            action_menu.entryconfig("Detect And Smooth Cables", state='normal')
             action_menu.entryconfig("Compute Dihedral Angles", state="normal") 
             action_menu.entryconfig("Compute Point-Mesh Distance", state="normal")
 
@@ -360,10 +362,6 @@ def gui_load_and_view():
         )
         status_var.set("✅ Point-mesh distance computed.")
 
-    btn_load = tk.Button(root, text="Load STL File", command=load_mesh, height=2, width=20)
-    btn_load.pack(expand=True)
-
-
     def compute_dihedral_angles():
         if not app_state["vertices"]:
             messagebox.showwarning("No Data", "Please build the structure first.")
@@ -400,5 +398,93 @@ def gui_load_and_view():
         )
         messagebox.showinfo("Dihedral Angles Statistics", msg)
         status_var.set("✅ Dihedral angles computed.")
+
+    def detect_and_smooth_cables():
+        if not app_state["vertices"]:
+            messagebox.showwarning("No Data", "Please build the structure first.")
+            return
+
+        from mesh_operations import detect_tubular_regions, taubin_smoothing_masked
+        from viewer import plot_mesh_with_vertex_mask  # new function for coloring cables
+
+        # Prompt user for parameters (with default values)
+        k_ring = simpledialog.askinteger("Parameter Input", "Neighborhood k_ring:", initialvalue=2, minvalue=1, maxvalue=10)
+        if k_ring is None:  # user cancelled
+            return
+
+        eig_ratio_thresh = simpledialog.askfloat("Parameter Input", "Eigenvalue ratio threshold (eig_ratio_thresh):", initialvalue=0.5, minvalue=0.0, maxvalue=1.0)
+        if eig_ratio_thresh is None:
+            return
+
+        radius_thresh = simpledialog.askfloat("Parameter Input", "Max radius threshold (radius_thresh), or 0 for no limit:", initialvalue=0.05, minvalue=0.0)
+        if radius_thresh is None:
+            return
+        if radius_thresh == 0:
+            radius_thresh = None  # disable radius filtering
+
+        min_component_size = simpledialog.askinteger("Parameter Input", "Min component size:", initialvalue=40, minvalue=1)
+        if min_component_size is None:
+            return
+
+        status_var.set("🔎 Detecting cable-like regions...")
+        root.update_idletasks()
+
+        mask, scores = detect_tubular_regions(
+            app_state["vertices"],
+            app_state["edges"],
+            app_state["triangles"],
+            k_ring=k_ring,
+            eig_ratio_thresh=eig_ratio_thresh,
+            radius_thresh=radius_thresh,
+            min_component_size=min_component_size
+        )
+
+        num_candidates = int(mask.sum())
+        status_var.set(f"Found {num_candidates} candidate vertices for cables.")
+        if num_candidates == 0:
+            messagebox.showinfo("Result", "No cable-like regions detected with current thresholds.")
+            return
+
+        # --- Show preview with cables in red ---
+        threading.Thread(
+            target=lambda: plot_mesh_with_vertex_mask(
+                app_state["vertices"],
+                app_state["triangles"],
+                mask
+            ),
+            daemon=True
+        ).start()
+
+        status_var.set("🧼 Smoothing detected cable regions...")
+        root.update_idletasks()
+
+        vertices_new, diff = taubin_smoothing_masked(
+            app_state["vertices"],
+            app_state["edges"],
+            app_state["triangles"],
+            mask,
+            iterations=10,
+            lambda_factor=0.6,
+            mu_factor=-0.62
+        )
+
+        app_state["vertices"] = vertices_new
+        status_var.set("✅ Cable smoothing complete.")
+
+        threading.Thread(
+            target=lambda: viewer.plot_mesh_from_data(
+                app_state["vertices"],
+                app_state["triangles"]
+            ),
+            daemon=True
+        ).start()
+
+        messagebox.showinfo(
+            "Done",
+            f"Detected {num_candidates} vertices in cable regions; smoothing applied."
+        )
+
+    btn_load = tk.Button(root, text="Load STL File", command=load_mesh, height=2, width=20)
+    btn_load.pack(expand=True)
 
     root.mainloop()
