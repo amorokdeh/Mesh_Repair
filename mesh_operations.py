@@ -194,7 +194,7 @@ def k_ring_neighbors(adjacency, start_idx, k=2):
     return sorted(visited)
 
 # --- Detect tubular (cable-like) vertices via local PCA ---
-def detect_tubular_regions(vertices, edges, triangles, k_ring=2,
+def detect_tubular_regions(vertices, edges, triangles, k_ring=8,
                            eig_ratio_thresh=0.25, radius_thresh=None,
                            min_component_size=30):
     """
@@ -279,7 +279,7 @@ def detect_tubular_regions(vertices, edges, triangles, k_ring=2,
 
 # --- Masked Taubin smoothing (updates only masked vertices) ---
 def taubin_smoothing_masked(vertices, edges, triangles, mask,
-                            iterations=10, lambda_factor=0.5, mu_factor=-0.53):
+                            iterations=30, lambda_factor=0.5, mu_factor=-0.53):
     """
     Apply Taubin smoothing but update only vertices with mask==True.
     Non-masked vertices remain fixed (act as boundary constraints).

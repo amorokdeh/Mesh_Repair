@@ -408,21 +408,21 @@ def gui_load_and_view():
         from viewer import plot_mesh_with_vertex_mask  # new function for coloring cables
 
         # Prompt user for parameters (with default values)
-        k_ring = simpledialog.askinteger("Parameter Input", "Neighborhood k_ring:", initialvalue=2, minvalue=1, maxvalue=10)
+        k_ring = simpledialog.askinteger("Parameter Input", "Neighborhood k_ring:", initialvalue=8, minvalue=1, maxvalue=10)
         if k_ring is None:  # user cancelled
             return
 
-        eig_ratio_thresh = simpledialog.askfloat("Parameter Input", "Eigenvalue ratio threshold (eig_ratio_thresh):", initialvalue=0.5, minvalue=0.0, maxvalue=1.0)
+        eig_ratio_thresh = simpledialog.askfloat("Parameter Input", "Eigenvalue ratio threshold (eig_ratio_thresh):", initialvalue=0.25, minvalue=0.0, maxvalue=1.0)
         if eig_ratio_thresh is None:
             return
 
-        radius_thresh = simpledialog.askfloat("Parameter Input", "Max radius threshold (radius_thresh), or 0 for no limit:", initialvalue=0.05, minvalue=0.0)
+        radius_thresh = simpledialog.askfloat("Parameter Input", "Max radius threshold (radius_thresh), or 0 for no limit:", initialvalue=0, minvalue=0.0)
         if radius_thresh is None:
             return
         if radius_thresh == 0:
             radius_thresh = None  # disable radius filtering
 
-        min_component_size = simpledialog.askinteger("Parameter Input", "Min component size:", initialvalue=40, minvalue=1)
+        min_component_size = simpledialog.askinteger("Parameter Input", "Min component size:", initialvalue=30, minvalue=1)
         if min_component_size is None:
             return
 
@@ -463,7 +463,7 @@ def gui_load_and_view():
             app_state["edges"],
             app_state["triangles"],
             mask,
-            iterations=10,
+            iterations=30,
             lambda_factor=0.6,
             mu_factor=-0.62
         )
