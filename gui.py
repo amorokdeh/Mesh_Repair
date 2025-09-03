@@ -11,10 +11,17 @@ import copy
 from mesh_export import save_mesh_to_json, save_mesh_to_stl
 from mesh_data_structure import build_mesh_from_stl
 from mesh_sanity_check import sanity_check_mesh, generate_sanity_report
-from mesh_operations import laplacian_smoothing, taubin_smoothing,point_to_mesh_distance
+from mesh_operations import laplacian_smoothing, taubin_smoothing,point_to_mesh_distance, vertices_triangles_to_numpy
 from mesh_operations import  compute_dihedral_angles
 from mesh_operations import MeshOperations
+from mesh_data_structure import Vertex, Triangle
 from tkinter import simpledialog
+
+try:
+    import QEM
+except ImportError:
+    QEM = None
+    print("Warning: fast_qem module not found. Mesh simplification will be slow.")
 
 
 def gui_load_and_view():
@@ -39,6 +46,7 @@ def gui_load_and_view():
     action_menu.add_command(label="Detect And Smooth Cables", state='disabled', command=lambda: detect_and_smooth_cables())
     action_menu.add_command(label="Compute Dihedral Angles", state='disabled', command=lambda: compute_dihedral_angles())
     action_menu.add_command(label="Compute Point-Mesh Distance", state='disabled', command=lambda: compute_point_mesh_distance_gui())
+    action_menu.add_command(label="Simplify Mesh (QEM)", state='disabled', command=lambda: QEM_simplify_mesh())
 
     status_var = tk.StringVar()
     status_var.set("No mesh loaded")
@@ -93,6 +101,7 @@ def gui_load_and_view():
             action_menu.entryconfig("Detect And Smooth Cables", state='normal')
             action_menu.entryconfig("Compute Dihedral Angles", state="normal") 
             action_menu.entryconfig("Compute Point-Mesh Distance", state="normal")
+            action_menu.entryconfig("Simplify Mesh (QEM)", state="normal")
 
             report_progress("✅ Data Structure ready")
 
@@ -483,6 +492,45 @@ def gui_load_and_view():
             "Done",
             f"Detected {num_candidates} vertices in cable regions; smoothing applied."
         )
+
+    def QEM_simplify_mesh():
+        if app_state["vertices"] is None:
+            messagebox.showwarning("No Data", "Please build the structure first.")
+            return
+
+        target_faces = sd.askinteger("QEM Mesh Simplification", "Target number of faces:", 
+                                    minvalue=100, maxvalue=1000000, initialvalue=5000)
+        if target_faces is None:
+            return
+
+        status_var.set("🛠️ Simplifying mesh...")
+        root.update_idletasks()
+
+        def run_simplification():
+            vertices_np, faces_np = vertices_triangles_to_numpy(app_state["vertices"], app_state["triangles"])
+
+            # Run the C++ simplifier
+            new_vertices_np, new_faces_np = QEM.simplify_mesh(vertices_np, faces_np, target_faces)
+
+            # Convert back to Vertex/Triangle objects
+            new_vertices = [Vertex(coords=new_vertices_np[i], index=i) for i in range(len(new_vertices_np))]
+            new_triangles = [Triangle(vertex_indices=list(new_faces_np[i]), index=i) for i in range(len(new_faces_np))]
+
+            # Recompute normals
+            for t in new_triangles:
+                t.recompute_normal(new_vertices)
+
+            # Update app_state
+            app_state["vertices"] = new_vertices
+            app_state["triangles"] = new_triangles
+
+            status_var.set(f"✅ QEM Simplification complete. Faces: {len(new_triangles)}")
+
+            # Refresh viewer in main thread
+            root.after(0, lambda: viewer.plot_mesh_from_data(app_state["vertices"], app_state["triangles"]))
+
+        threading.Thread(target=run_simplification, daemon=True).start()
+
 
     btn_load = tk.Button(root, text="Load STL File", command=load_mesh, height=2, width=20)
     btn_load.pack(expand=True)

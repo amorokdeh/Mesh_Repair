@@ -322,3 +322,8 @@ def taubin_smoothing_masked(vertices, edges, triangles, mask,
 
     diff_vectors = coords - original_coords
     return vertices, diff_vectors
+
+def vertices_triangles_to_numpy(vertices, triangles):
+    vertices_np = np.array([v.coords for v in vertices], dtype=np.float64)
+    faces_np = np.array([t.vertex_indices for t in triangles], dtype=np.int32)
+    return vertices_np.copy(), faces_np.copy()

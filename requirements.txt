@@ -2,3 +2,6 @@ pyvista
 numpy
 pyvistaqt
 numpy-stl
+setuptools
+wheel
+pybind11
