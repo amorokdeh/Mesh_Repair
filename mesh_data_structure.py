@@ -56,7 +56,7 @@ def build_mesh_from_stl(file_path, progress_callback=None):
         step += 1
         if i % 100 == 0 and progress_callback:
             percent = min(100, int((step / total_steps) * 100))
-            progress_callback(f"Building vertices... {percent}%")
+            progress_callback(f"{percent}")
 
     # Build triangles list
     triangles = []
@@ -65,7 +65,7 @@ def build_mesh_from_stl(file_path, progress_callback=None):
         step += 1
         if i % 100 == 0 and progress_callback:
             percent = int((step / total_steps) * 100)
-            progress_callback(f"Building triangles... {percent}%")
+            progress_callback(f"{percent}")
 
     # Build Unique Edges and Link to Triangles
     edge_dict = {}  # Helps avoid duplicate edge creation
@@ -119,9 +119,9 @@ def build_mesh_from_stl(file_path, progress_callback=None):
         step += 1
         if step % 200 == 0 and progress_callback:
             percent = int((step / total_steps) * 100)
-            progress_callback(f"Computing normals... {percent}%")
+            progress_callback(f"{percent}")
 
     if progress_callback:
-        progress_callback("✅ Structure complete (100%)")
+        progress_callback("100")
 
     return vertices, edges, triangles

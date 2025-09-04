@@ -1,538 +1,770 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import numpy as np
-import tkinter.simpledialog as sd
-
-from multiprocessing import Process
-import threading
-import viewer
-import time
+import sys
+import os
 import copy
-from mesh_export import save_mesh_to_json, save_mesh_to_stl
-from mesh_data_structure import build_mesh_from_stl
+import time
+import threading
+import numpy as np
+import pyvista as pv
+import re
+
+# If you prefer PySide6, swap the imports below (see comment a few lines later).
+
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QAction, QFileDialog, QMessageBox, QInputDialog,
+    QTextEdit, QDockWidget, QProgressBar, QWidget, QVBoxLayout
+)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
+
+from pyvistaqt import QtInteractor
+
+# --- Your project imports (unchanged) ---
+from mesh_data_structure import build_mesh_from_stl, Vertex, Triangle
 from mesh_sanity_check import sanity_check_mesh, generate_sanity_report
-from mesh_operations import laplacian_smoothing, taubin_smoothing,point_to_mesh_distance, vertices_triangles_to_numpy
-from mesh_operations import  compute_dihedral_angles
-from mesh_operations import MeshOperations
-from mesh_data_structure import Vertex, Triangle
-from tkinter import simpledialog
+from mesh_operations import (
+    MeshOperations, laplacian_smoothing, taubin_smoothing, vertices_triangles_to_numpy,
+    compute_dihedral_angles, point_to_mesh_distance, detect_tubular_regions,
+    taubin_smoothing_masked
+)
+from mesh_export import save_mesh_to_json, save_mesh_to_stl
 
 try:
-    import QEM
-except ImportError:
+    import QEM  # your C++/pybind11 module name
+except Exception:
     QEM = None
-    print("Warning: fast_qem module not found. Mesh simplification will be slow.")
+    print("Warning: QEM extension not found; simplification will be unavailable.")
 
+class WorkerSignals(QObject):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    log = pyqtSignal(str)
+    report_ready = pyqtSignal(str)
+    update_preview = pyqtSignal(object)
+    mesh_update = pyqtSignal(object, object)
+    show_message = pyqtSignal(str, str)
 
-def gui_load_and_view():
-    root = tk.Tk()
-    root.title("STL Viewer Launcher")
-    root.geometry("400x200")
+class MeshApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Mesh Repair Tool")
+        self.resize(1280, 800)
 
-    menubar = tk.Menu(root)
-    root.config(menu=menubar)
+        # --- Embedded 3D viewer ---
+        self.plotter = QtInteractor(self)
+        self.plotter.set_background("#1e1e1e")
+        self.setCentralWidget(self.plotter)
 
-    info_menu = tk.Menu(menubar, tearoff=0)
-    menubar.add_cascade(label="Mesh Info", menu=info_menu)
-    info_menu.add_command(label="No mesh loaded", state='disabled')
+        # Signals connections
+        self.signals = WorkerSignals()
+        self.signals.mesh_update.connect(self.update_mesh_in_plotter)
+        self.signals.show_message.connect(lambda title, msg: QMessageBox.information(self, title, msg))
+        self.signals.log.connect(self.log)
 
-    action_menu = tk.Menu(menubar, tearoff=0)
-    menubar.add_cascade(label="Actions", menu=action_menu)
-    action_menu.add_command(label="Build Data Structure", state='disabled', command=lambda: build_structure())
-    action_menu.add_command(label="Export Mesh", state='disabled', command=lambda: export_mesh())
-    action_menu.add_command(label="Sanity Check Mesh", state='disabled', command=lambda: sanity_check())
-    action_menu.add_command(label="Laplacian Smoothing", state='disabled', command=lambda: laplacian_smoothing_gui())
-    action_menu.add_command(label="Taubin Smoothing", state='disabled', command=lambda: taubin_smoothing_gui())
-    action_menu.add_command(label="Detect And Smooth Cables", state='disabled', command=lambda: detect_and_smooth_cables())
-    action_menu.add_command(label="Compute Dihedral Angles", state='disabled', command=lambda: compute_dihedral_angles())
-    action_menu.add_command(label="Compute Point-Mesh Distance", state='disabled', command=lambda: compute_point_mesh_distance_gui())
-    action_menu.add_command(label="Simplify Mesh (QEM)", state='disabled', command=lambda: QEM_simplify_mesh())
+        # container for log + progress bar
+        self.log_panel = QTextEdit()
+        self.log_panel.setReadOnly(True)
+        dock_container = QWidget()
+        dock_layout = QVBoxLayout()
+        dock_layout.setContentsMargins(2, 2, 2, 2)
+        dock_layout.setSpacing(4)
+        dock_container.setLayout(dock_layout)
 
-    status_var = tk.StringVar()
-    status_var.set("No mesh loaded")
-    status_label = tk.Label(root, textvariable=status_var, font=("Arial", 10))
-    status_label.pack(pady=(10, 0))
+        dock_layout.addWidget(self.log_panel)
 
-    app_state = {
-        "vertices": None,
-        "edges": None,
-        "triangles": None,
-        "file_path": None
-    }
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setFormat("%p%")
+        self.progress.hide()
+        dock_layout.addWidget(self.progress)
 
-    def update_mesh_info(vertices, edges, triangles):
-        info_menu.delete(0, 'end')
-        info_menu.add_command(label=f"Vertices: {len(vertices)}", state='disabled')
-        info_menu.add_command(label=f"Edges: {len(edges)}", state='disabled')
-        info_menu.add_command(label=f"Triangles: {len(triangles)}", state='disabled')
+        dock = QDockWidget("Logs", self)
+        dock.setWidget(dock_container)
+        dock.setAllowedAreas(Qt.RightDockWidgetArea)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
-        status_var.set(f"Vertices: {len(vertices)} | Edges: {len(edges)} | Triangles: {len(triangles)}")
+        # --- Menu bar ---
+        menubar = self.menuBar()
 
-    def build_structure():
-        def report_progress(msg):
-            status_var.set(msg)
-            root.update_idletasks()
+        file_menu = menubar.addMenu("File")
+        self.action_load = QAction("Load STL Mesh", self)
+        self.action_load.triggered.connect(self.load_stl)
+        file_menu.addAction(self.action_load)
+
+        self.action_export = QAction("Export Mesh", self)
+        self.action_export.triggered.connect(self.export_mesh)
+        self.action_export.setEnabled(False)
+        file_menu.addAction(self.action_export)
+
+        actions_menu = menubar.addMenu("Actions")
+        self.action_build = QAction("Build Data Structure", self)
+        self.action_build.setEnabled(False)
+        self.action_build.triggered.connect(self.build_structure)
+        actions_menu.addAction(self.action_build)
+
+        self.action_sanity = QAction("Sanity Check Mesh", self)
+        self.action_sanity.setEnabled(False)
+        self.action_sanity.triggered.connect(self.sanity_check)
+        actions_menu.addAction(self.action_sanity)
+
+        self.action_lap = QAction("Laplacian Smoothing", self)
+        self.action_lap.setEnabled(False)
+        self.action_lap.triggered.connect(self.laplacian_smoothing_gui)
+        actions_menu.addAction(self.action_lap)
+
+        self.action_taubin = QAction("Taubin Smoothing", self)
+        self.action_taubin.setEnabled(False)
+        self.action_taubin.triggered.connect(self.taubin_smoothing_gui)
+        actions_menu.addAction(self.action_taubin)
+
+        self.action_cables = QAction("Detect And Smooth Cables", self)
+        self.action_cables.setEnabled(False)
+        self.action_cables.triggered.connect(self.detect_and_smooth_cables)
+        actions_menu.addAction(self.action_cables)
+
+        self.action_dihedral = QAction("Compute Dihedral Angles", self)
+        self.action_dihedral.setEnabled(False)
+        self.action_dihedral.triggered.connect(self.compute_dihedral_angles)
+        actions_menu.addAction(self.action_dihedral)
+
+        self.action_pointdist = QAction("Compute Point-Mesh Distance", self)
+        self.action_pointdist.setEnabled(False)
+        self.action_pointdist.triggered.connect(self.compute_point_mesh_distance_gui)
+        actions_menu.addAction(self.action_pointdist)
+
+        self.action_qem = QAction("Simplify Mesh (QEM)", self)
+        self.action_qem.setEnabled(False and (QEM is not None))
+        self.action_qem.triggered.connect(self.qem_simplify_mesh)
+        actions_menu.addAction(self.action_qem)
+
+        # --- App state (kept same semantics as your Tk app) ---
+        self.state = {
+            "file_path": None,
+            "vertices": None,     # list[Vertex]
+            "edges": None,        # your edge structure
+            "triangles": None,    # list[Triangle]
+            "original_vertices": None,
+        }
+
+        # Show empty scene initially
+        self.plotter.add_text("Load an STL via File → Load STL Mesh", font_size=12)
+
+    def update_mesh_in_plotter(self, pts, colors):
+        faces = []
+        for t in self.state["triangles"]:
+            faces.extend([3] + list(t.vertex_indices))
+        mesh = pv.PolyData(pts, np.array(faces))
+        mesh.point_data["colors"] = colors
+        self.plotter.clear()
+        self.plotter.add_mesh(mesh, scalars="colors", rgb=True, show_edges=True, edge_color="#001f3f")
+        self.plotter.reset_camera()
+
+    # ---- Helpers ----
+    def log(self, msg: str):
+        self.log_panel.append(msg)
+        # keep also to stdout for devs
+        print(msg)
+
+    def set_actions_enabled_for_loaded(self, enabled: bool):
+        self.action_build.setEnabled(enabled)
+        self.action_export.setEnabled(False)  # enable after built
+        self.action_sanity.setEnabled(False)
+        self.action_lap.setEnabled(False)
+        self.action_taubin.setEnabled(False)
+        self.action_cables.setEnabled(False)
+        self.action_dihedral.setEnabled(False)
+        self.action_pointdist.setEnabled(False)
+        self.action_qem.setEnabled(False and (QEM is not None))
+
+    def set_actions_enabled_for_built(self, enabled: bool):
+        self.action_export.setEnabled(enabled)
+        self.action_sanity.setEnabled(enabled)
+        self.action_lap.setEnabled(enabled)
+        self.action_taubin.setEnabled(enabled)
+        self.action_cables.setEnabled(enabled)
+        self.action_dihedral.setEnabled(enabled)
+        self.action_pointdist.setEnabled(enabled)
+        self.action_qem.setEnabled(enabled and (QEM is not None))
+
+    def draw_mesh_from_vertices_triangles(self):
+        """Render current state vertices/triangles in the embedded plotter."""
+        v = self.state["vertices"]
+        t = self.state["triangles"]
+        if not v or not t:
+            return
+
+        # Build numpy arrays
+        points = np.array([vv.coords for vv in v])
+        faces = []
+        for tri in t:
+            faces.extend([3] + list(tri.vertex_indices))
+        faces = np.array(faces)
+
+        mesh = pv.PolyData(points, faces)
+        self.plotter.clear()
+        self.plotter.set_background("#1e1e1e")
+        self.plotter.add_mesh(
+            mesh,
+            color="#ccf5ff",
+            show_edges=True,
+            edge_color="#001f3f",
+            line_width=0.5,
+            smooth_shading=True,
+        )
+        self.plotter.camera_position = "iso"
+        self.plotter.reset_camera()
+
+    # ---- Menu actions ----
+    def load_stl(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open STL", "", "STL Files (*.stl)")
+        if not path:
+            return
+        self.state["file_path"] = path
+        self.log(f"📂 Loading STL: {path}")
 
         try:
-            action_menu.entryconfig("Build Data Structure", state="disabled")
-            report_progress("⏳ Building Data Structure...")
-
-            start = time.time()
-            vertices, edges, triangles = build_mesh_from_stl(
-                app_state["file_path"],
-                progress_callback=lambda percent: report_progress(f"🔧 Building... {percent}")
+            mesh = pv.read(path)
+            self.plotter.clear()
+            self.plotter.set_background("#1e1e1e")
+            self.plotter.add_mesh(
+                mesh, color="#ccf5ff", show_edges=True, edge_color="#001f3f",
+                line_width=0.5, smooth_shading=True
             )
-            end = time.time()
-            
-            app_state["vertices"] = vertices
-            app_state["edges"] = edges
-            app_state["triangles"] = triangles
-
-            MeshOperations.compute_triangle_normals(vertices, triangles)
-            MeshOperations.compute_vertex_normals(vertices, triangles)
-
-            update_mesh_info(vertices, edges, triangles)
-            messagebox.showinfo("Success", "Data Structure created successfully.\n" f"⏱️ Build time: {end - start:.6f} seconds")
-
-            action_menu.entryconfig("Export Mesh", state="normal")
-            action_menu.entryconfig("Sanity Check Mesh", state="normal")
-            action_menu.entryconfig("Laplacian Smoothing", state="normal")
-            action_menu.entryconfig("Taubin Smoothing", state='normal')
-            action_menu.entryconfig("Detect And Smooth Cables", state='normal')
-            action_menu.entryconfig("Compute Dihedral Angles", state="normal") 
-            action_menu.entryconfig("Compute Point-Mesh Distance", state="normal")
-            action_menu.entryconfig("Simplify Mesh (QEM)", state="normal")
-
-            report_progress("✅ Data Structure ready")
-
+            self.plotter.camera_position = "iso"
+            self.plotter.reset_camera()
+            self.log("✅ STL loaded. Ready to build data structure.")
+            self.set_actions_enabled_for_loaded(True)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to build structure:\n{e}")
-            status_var.set("❌ Structure build failed")
-            action_menu.entryconfig("Build Data Structure", state="normal")
+            QMessageBox.critical(self, "Load Error", str(e))
+            self.log(f"❌ Load failed: {e}")
 
-    def export_mesh():
-        if not app_state["vertices"]:
-            messagebox.showwarning("No Data", "Please build the structure first.")
+    def export_mesh(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
             return
 
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("STL files", "*.stl")],
-            title="Export Mesh As"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Mesh", "", "JSON (*.json);;STL (*.stl)"
         )
-        if not file_path:
-            return  # User canceled
+        if not path:
+            return
 
-        def run_export():
-            def progress_cb(percent):
-                status_var.set(f"📤 Exporting mesh... {percent}%")
-                root.update_idletasks()
-
+        def worker():
             try:
-                if file_path.endswith(".json"):
+                if path.lower().endswith(".json"):
+                    def progress_cb(pct):
+                        self.log(f"📤 Exporting JSON... {pct}%")
                     save_mesh_to_json(
-                        app_state["vertices"],
-                        app_state["edges"],
-                        app_state["triangles"],
-                        filename=file_path,
-                        progress_callback=progress_cb
+                        self.state["vertices"], self.state["edges"], self.state["triangles"],
+                        filename=path, progress_callback=progress_cb
                     )
-                    messagebox.showinfo("Exported", f"Mesh exported to '{file_path}'.")
-                elif file_path.endswith(".stl"):
-                    save_mesh_to_stl(
-                        app_state["vertices"],
-                        app_state["triangles"],
-                        file_path
-                    )
-                    messagebox.showinfo("Exported", f"Mesh exported to '{file_path}'.")
+                elif path.lower().endswith(".stl"):
+                    self.log("📤 Exporting STL...")
+                    save_mesh_to_stl(self.state["vertices"], self.state["triangles"], path)
                 else:
-                    raise ValueError("Unsupported file extension.")
-
-                status_var.set("✅ Export completed")
-
+                    raise ValueError("Unsupported extension.")
+                self.log("✅ Export completed.")
             except Exception as e:
-                status_var.set("❌ Export failed")
-                messagebox.showerror("Error", f"Failed to export mesh:\n{e}")
+                self.log(f"❌ Export failed: {e}")
+                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Export Error", str(e)))
 
-        threading.Thread(target=run_export, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
-
-    def load_mesh():
-        file_path = filedialog.askopenfilename(
-            title="Select STL File",
-            filetypes=[("STL Files", "*.stl")]
-        )
-        if not file_path:
-            messagebox.showinfo("No file selected", "Please select an STL file.")
+    def build_structure(self):
+        if not self.state["file_path"]:
+            QMessageBox.information(self, "Info", "Please load an STL first.")
             return
 
-        def load():
+        self.progress.show()
+        self.progress.setValue(0)
+        self.action_build.setEnabled(False)
+
+        # Use the existing WorkerSignals
+        signals = WorkerSignals()
+
+        # Connect signals to GUI updates
+        signals.progress.connect(self.progress.setValue)
+        signals.log.connect(self.log)
+        signals.finished.connect(lambda: [
+            self.progress.hide(),
+            self.action_build.setEnabled(True),
+            self.set_actions_enabled_for_built(True)
+        ])
+        signals.error.connect(lambda msg: [
+            self.progress.hide(),
+            self.action_build.setEnabled(True),
+            QMessageBox.critical(self, "Build Error", msg),
+            self.log(f"❌ Build failed: {msg}")
+        ])
+
+        # Since drawing is a GUI action, we can use a separate log signal to trigger it
+        def draw_mesh():
+            self.draw_mesh_from_vertices_triangles()
+        signals.finished.connect(draw_mesh)
+
+        def worker():
+            import time
+            t0 = time.time()
             try:
-                def report_status(msg):
-                    status_var.set(msg)
-                    root.update_idletasks()
+                # Callback for mesh building (only sends integer percent)
+                def callback(pct_str: str):
+                    try:
+                        pct = int(pct_str)
+                        signals.progress.emit(pct)
+                    except ValueError:
+                        pass  # ignore non-integer messages
 
-                report_status("⏳ Loading STL file...")
-                app_state["file_path"] = file_path
+                # Build the mesh structure
+                vertices, edges, triangles = build_mesh_from_stl(
+                    self.state["file_path"],
+                    progress_callback=callback
+                )
 
-                # Launch viewer only
-                p = Process(target=viewer.plot_mesh_from_file, args=(file_path,))
-                p.daemon = True
-                p.start()
+                # Compute normals
+                MeshOperations.compute_triangle_normals(vertices, triangles)
+                MeshOperations.compute_vertex_normals(vertices, triangles)
 
-                report_status("✅ STL file loaded. Ready to build structure.")
-                
-                # Enable buttons
-                action_menu.entryconfig("Build Data Structure", state="normal")
-                action_menu.entryconfig("Export Mesh", state="disabled")
-                action_menu.entryconfig("Sanity Check Mesh", state="disabled") 
+                # Update app state
+                self.state["vertices"] = vertices
+                self.state["edges"] = edges
+                self.state["triangles"] = triangles
 
-                # Hide Load button
-                btn_load.config(state="disabled")
+                t1 = time.time()
+                signals.log.emit(f"✅ Data structure ready (time: {t1 - t0:.3f}s)")
 
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to load/display mesh:\n{e}")
-                status_var.set("❌ Load failed")
+                signals.error.emit(str(e))
 
-        threading.Thread(target=load).start()
+            finally:
+                signals.finished.emit()
 
-    def sanity_check():
-        if not app_state["vertices"]:
-            messagebox.showwarning("No Data", "Please build the structure first.")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def sanity_check(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
             return
 
-        def progress_update(msg):
-            status_var.set(f"🛠️ {msg}")
-            root.update_idletasks()
+        self.progress.show()
+        self.progress.setValue(0)
+        self.log("🧪 Running sanity check...")
 
-        def run_check():
+        signals = WorkerSignals()
+        # Add a custom signal for sending the report
+        if not hasattr(signals, "report_ready"):
+            signals.report_ready = pyqtSignal(str)  
+
+        # Connect signals
+        signals.progress.connect(self.progress.setValue)
+        signals.finished.connect(lambda: self.progress.hide())
+        signals.finished.connect(lambda: self.log("✅ Sanity check complete."))
+        signals.log.connect(self.log)
+        signals.report_ready.connect(self._show_sanity_report)  # will show the report
+
+        def worker():
+            import time
+            t0 = time.time()
             try:
-                start = time.time()
                 results = sanity_check_mesh(
-                    app_state["vertices"],
-                    app_state["edges"],
-                    app_state["triangles"],
-                    progress_callback=progress_update
+                    self.state["vertices"], self.state["edges"], self.state["triangles"],
+                    progress_callback=lambda msg: signals.log.emit(msg)
                 )
-                end = time.time()
-                runtime = end - start
-                msg = generate_sanity_report(results)
-                msg += f"\n\nSanity check runtime: {runtime:.6f} seconds"
+                t1 = time.time()
+                report_msg = generate_sanity_report(results)
+                report_msg += f"\n\nSanity check runtime: {t1 - t0:.6f} seconds"
 
-
-                status_var.set("✅ Sanity check done.")
-                messagebox.showinfo("Sanity Check Result", msg)
-
-                # Save the report to a file
-                try:
-                    with open("sanity_check_report.txt", "w", encoding="utf-8") as f:
-                        f.write(msg)
-                except Exception as e:
-                    messagebox.showwarning("Export Failed", f"Could not save report:\n{e}")
+                # Send the report to the main thread
+                signals.report_ready.emit(report_msg)
 
             except Exception as e:
-                status_var.set("❌ Sanity check error")
-                messagebox.showerror("Error", f"Sanity check failed:\n{e}")
+                signals.log.emit(f"❌ Sanity check error: {e}")
+                signals.error.emit(str(e))
+
+            finally:
+                signals.finished.emit()
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
-        threading.Thread(target=run_check, daemon=True).start()
+    # Helper method in your class to show the report safely in main thread
+    def _show_sanity_report(self, msg):
+        try:
+            with open("sanity_check_report.txt", "w", encoding="utf-8") as f:
+                f.write(msg)
+        except Exception as e:
+            self.log(f"⚠️ Could not save report: {e}")
+        QMessageBox.information(self, "Sanity Check Result", msg)
 
-    def laplacian_smoothing_gui():
-        if not app_state["vertices"]:
-            messagebox.showwarning("No Data", "Please build the structure first.")
+
+    def laplacian_smoothing_gui(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
             return
 
-        # Simple input dialogs for iterations and lambda
-        iterations = sd.askinteger("Laplacian Smoothing", "Number of iterations:", minvalue=1, maxvalue=100, initialvalue=1)
-        if iterations is None:
+        iterations, ok = QInputDialog.getInt(self, "Laplacian Smoothing", "Iterations:", 1, 1, 100, 1)
+        if not ok:
             return
-        lambda_factor = sd.askfloat("Laplacian Smoothing", "Lambda factor (0 to 1):", minvalue=0.0, maxvalue=1.0, initialvalue=0.5)
-        if lambda_factor is None:
+        lam, ok = QInputDialog.getDouble(self, "Laplacian Smoothing", "Lambda (0..1):", 0.5, 0.0, 1.0, 3)
+        if not ok:
             return
 
-        def run_smoothing():
-            status_var.set("🛠️ Applying Laplacian smoothing...")
-            root.update_idletasks()
+        self.progress.show()
+        self.progress.setValue(0)
+        self.action_build.setEnabled(False)
+        self.log("🛠️ Applying Laplacian smoothing...")
 
-            start = time.time()
-            if "original_vertices" not in app_state:
-                app_state["original_vertices"] = copy.deepcopy(app_state["vertices"])
-            
-            vertices, diff_vectors = laplacian_smoothing(
-                app_state["vertices"],
-                app_state["edges"],
-                app_state["triangles"],
-                iterations=iterations,
-                lambda_factor=lambda_factor
-            )
+        signals = WorkerSignals()
+        signals.progress.connect(self.progress.setValue)
+        signals.finished.connect(lambda: self.progress.hide())
+        signals.finished.connect(lambda: self.action_build.setEnabled(True))
+        signals.log.connect(self.log)
 
-            end = time.time()
-            runtime = end - start
+        def worker():
+            import time
+            t0 = time.time()
+            try:
+                if self.state.get("original_vertices") is None:
+                    self.state["original_vertices"] = copy.deepcopy(self.state["vertices"])
 
-            app_state["vertices"] = vertices  # update app state
+                vertices = self.state["vertices"]
+                V = len(vertices)
+                
+                # Build adjacency list once
+                adjacency = [[] for _ in range(V)]
+                for edge in self.state["edges"]:
+                    adjacency[edge.v1].append(edge.v2)
+                    adjacency[edge.v2].append(edge.v1)
 
-            moved_distances = np.linalg.norm(diff_vectors, axis=1)
-            max_move = moved_distances.max()
-           
-            messagebox.showinfo(
-                "Laplacian Smoothing", 
-                f"Smoothing done.\nMax vertex move distance: {max_move:.4f}\n" 
-                f"Runtime: {runtime:.6f} seconds"
+                coords = np.array([v.coords for v in vertices])
+                original_coords = coords.copy()
+
+                # Smoothing iterations with progress updates
+                for it in range(iterations):
+                    new_coords = coords.copy()
+                    for i in range(V):
+                        neighbors = adjacency[i]
+                        if neighbors:
+                            avg = coords[neighbors].mean(axis=0)
+                            new_coords[i] = coords[i] + lam * (avg - coords[i])
+                    coords = new_coords
+
+                    # Emit progress (percentage)
+                    pct = int((it + 1) / iterations * 100)
+                    signals.progress.emit(pct)
+
+                diff_vectors = coords - original_coords
+
+                # Update vertices
+                for i, v in enumerate(vertices):
+                    v.coords = coords[i]
+                self.state["vertices"] = vertices
+
+                t1 = time.time()
+                max_move = float(np.linalg.norm(diff_vectors, axis=1).max())
+                signals.log.emit(f"✅ Laplacian smoothing done. Max move: {max_move:.4f}. Time: {t1 - t0:.3f}s")
+
+                # Draw the updated mesh
+                QTimer.singleShot(0, self.draw_mesh_from_vertices_triangles)
+
+            except Exception as e:
+                signals.log.emit(f"❌ Laplacian smoothing error: {e}")
+
+            finally:
+                signals.finished.emit()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def taubin_smoothing_gui(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
+            return
+
+        iters, ok = QInputDialog.getInt(self, "Taubin Smoothing", "Iterations:", 10, 1, 100, 1)
+        if not ok:
+            return
+        lam, ok = QInputDialog.getDouble(self, "Taubin Smoothing", "Lambda (positive):", 0.5, 0.0, 1.0, 3)
+        if not ok:
+            return
+        mu, ok = QInputDialog.getDouble(self, "Taubin Smoothing", "Mu (negative):", -0.53, -5.0, 0.0, 3)
+        if not ok:
+            return
+
+        self.progress.show()
+        self.progress.setValue(0)
+        self.action_build.setEnabled(False)
+        self.log("🛠️ Applying Taubin smoothing...")
+
+        signals = WorkerSignals()
+        signals.progress.connect(self.progress.setValue)
+        signals.finished.connect(lambda: self.progress.hide())
+        signals.finished.connect(lambda: self.action_build.setEnabled(True))
+        signals.log.connect(self.log)
+
+        def worker():
+            import time
+            t0 = time.time()
+            try:
+                if self.state.get("original_vertices") is None:
+                    self.state["original_vertices"] = copy.deepcopy(self.state["vertices"])
+
+                vertices = self.state["vertices"]
+                V = len(vertices)
+
+                # Build adjacency list
+                adjacency = [[] for _ in range(V)]
+                for edge in self.state["edges"]:
+                    adjacency[edge.v1].append(edge.v2)
+                    adjacency[edge.v2].append(edge.v1)
+
+                coords = np.array([v.coords for v in vertices])
+                original_coords = coords.copy()
+
+                def laplacian_step(coords, factor):
+                    new_coords = coords.copy()
+                    for i in range(V):
+                        neighbors = adjacency[i]
+                        if neighbors:
+                            avg = coords[neighbors].mean(axis=0)
+                            new_coords[i] += factor * (avg - coords[i])
+                    return new_coords
+
+                # Smoothing iterations with progress updates
+                for it in range(iters):
+                    coords = laplacian_step(coords, lam)
+                    coords = laplacian_step(coords, mu)
+                    pct = int((it + 1) / iters * 100)
+                    signals.progress.emit(pct)
+
+                diff_vectors = coords - original_coords
+
+                # Update vertex objects
+                for i, v in enumerate(vertices):
+                    v.coords = coords[i]
+                self.state["vertices"] = vertices
+
+                t1 = time.time()
+                max_move = float(np.linalg.norm(diff_vectors, axis=1).max())
+                signals.log.emit(f"✅ Taubin smoothing done. Max move: {max_move:.4f}. Time: {t1 - t0:.3f}s")
+
+                # Draw updated mesh
+                QTimer.singleShot(0, self.draw_mesh_from_vertices_triangles)
+
+            except Exception as e:
+                signals.log.emit(f"❌ Taubin smoothing error: {e}")
+
+            finally:
+                signals.finished.emit()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def compute_dihedral_angles(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
+            return
+
+        self.log("🧮 Computing dihedral angles...")
+
+        def worker():
+            try:
+                MeshOperations.compute_triangle_normals(self.state["vertices"], self.state["triangles"])
+                angles = compute_dihedral_angles(self.state["edges"], self.state["triangles"])
+                vals = [a for a in angles.values() if a is not None]
+                if not vals:
+                    self.log("No non-boundary edges found.")
+                    QTimer.singleShot(0, lambda: QMessageBox.information(self, "Dihedral Angles", "No non-boundary edges."))
+                    return
+                arr = np.array(vals)
+                msg = (
+                    f"Computed {len(arr)} edges.\n"
+                    f"Min: {arr.min():.2f}°\nMax: {arr.max():.2f}°\n"
+                    f"Mean: {arr.mean():.2f}°\nStd: {arr.std():.2f}°"
+                )
+                self.log("✅ Dihedral angles computed.")
+                QTimer.singleShot(0, lambda: QMessageBox.information(self, "Dihedral Angles Statistics", msg))
+            except Exception as e:
+                self.log(f"❌ Dihedral error: {e}")
+                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Error", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def compute_point_mesh_distance_gui(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
+            return
+
+        s, ok = QInputDialog.getText(self, "Input Point", "x,y,z:")
+        if not ok or not s:
+            return
+        try:
+            x, y, z = [float(p.strip()) for p in s.split(",")]
+            point = np.array([x, y, z], dtype=float)
+        except Exception:
+            QMessageBox.critical(self, "Invalid Input", "Please enter a valid 3D point as x,y,z.")
+            return
+
+        def worker():
+            try:
+                dist, closest = point_to_mesh_distance(point, self.state["vertices"], self.state["triangles"])
+                self.log(f"✅ Point-mesh distance: {dist:.6f}. Closest: {closest}")
+                QTimer.singleShot(0, lambda: QMessageBox.information(
+                    self, "Point-Mesh Distance",
+                    f"Shortest distance: {dist:.6f}\nClosest point on mesh: {closest}"
+                ))
+                # Visualize: add the two points as spheres
+                def draw_points():
+                    self.draw_mesh_from_vertices_triangles()
+                    pts = np.array([vv.coords for vv in self.state["vertices"]])
+                    r = 0.01 * np.linalg.norm(pts.max(0) - pts.min(0))
+                    self.plotter.add_mesh(pv.Sphere(radius=r, center=point), color="red")
+                    self.plotter.add_mesh(pv.Sphere(radius=r, center=closest), color="green")
+                    self.plotter.reset_camera()
+                QTimer.singleShot(0, draw_points)
+            except Exception as e:
+                self.log(f"❌ Distance error: {e}")
+                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Error", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def detect_and_smooth_cables(self):
+        if not self.state["vertices"]:
+            self.signals.show_message.emit("No Data", "Please build the structure first.")
+            return
+
+        # User inputs
+        k_ring, ok = QInputDialog.getInt(self, "Detect Cables", "Neighborhood k_ring:", 8, 1, 10, 1)
+        if not ok: return
+        eig_ratio, ok = QInputDialog.getDouble(self, "Detect Cables", "Eigenvalue ratio threshold:", 0.25, 0.0, 1.0, 3)
+        if not ok: return
+        radius, ok = QInputDialog.getDouble(self, "Detect Cables", "Max radius threshold (0 = no limit):", 0.0, 0.0, 1e9, 6)
+        if not ok: return
+        if radius == 0.0: radius = None
+        min_comp, ok = QInputDialog.getInt(self, "Detect Cables", "Min component size:", 30, 1, 100000, 1)
+        if not ok: return
+
+        self.signals.log.emit("🔎 Detecting cable-like regions...")
+
+        def worker():
+            try:
+                mask, scores = detect_tubular_regions(
+                    self.state["vertices"], self.state["edges"], self.state["triangles"],
+                    k_ring=k_ring, eig_ratio_thresh=eig_ratio, radius_thresh=radius,
+                    min_component_size=min_comp
+                )
+                num = int(mask.sum())
+                self.signals.log.emit(f"Found {num} candidate cable vertices.")
+                if num == 0:
+                    self.signals.show_message.emit("Result", "No cable-like regions detected.")
+                    return
+
+                # Prepare preview colors in worker thread
+                pts = np.array([v.coords for v in self.state["vertices"]])
+                colors = np.zeros((len(self.state["vertices"]), 3))
+                colors[mask] = np.array(pv.Color("red").int_rgb) / 255.0
+                colors[~mask] = np.array(pv.Color("#ccf5ff").int_rgb) / 255.0
+
+                # Emit signal to update mesh on main thread
+                self.signals.mesh_update.emit(pts, colors)
+
+                self.signals.log.emit("🧼 Smoothing detected cable regions...")
+                vertices_new, diff = taubin_smoothing_masked(
+                    self.state["vertices"], self.state["edges"], self.state["triangles"],
+                    mask, iterations=30, lambda_factor=0.6, mu_factor=-0.62
+                )
+                self.state["vertices"] = vertices_new
+                self.signals.log.emit("✅ Cable smoothing complete.")
+
+                # Emit final mesh for main thread
+                pts_final = np.array([v.coords for v in self.state["vertices"]])
+                colors_final = np.zeros((len(self.state["vertices"]), 3))
+                colors_final[mask] = np.array(pv.Color("red").int_rgb) / 255.0
+                colors_final[~mask] = np.array(pv.Color("#ccf5ff").int_rgb) / 255.0
+                self.signals.mesh_update.emit(pts_final, colors_final)
+
+                self.signals.show_message.emit(
+                    "Done", f"Detected {num} vertices in cable regions; smoothing applied."
                 )
 
-            status_var.set("✅ Smoothing complete.")
+            except Exception as e:
+                self.signals.error.emit(f"Cable detection/smoothing error: {e}")
 
-            # Launch viewer with updated mesh
-            def show_updated():
-                viewer.plot_mesh_from_data(app_state["vertices"], app_state["triangles"])
+        threading.Thread(target=worker, daemon=True).start()
 
-            threading.Thread(target=show_updated, daemon=True).start()
-
-
-        threading.Thread(target=run_smoothing, daemon=True).start()
-
-    def taubin_smoothing_gui():
-        if not app_state["vertices"]:
-            messagebox.showwarning("No Data", "Please build the structure first.")
+    def qem_simplify_mesh(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
+            return
+        if QEM is None:
+            QMessageBox.critical(self, "QEM Not Available", "QEM extension module not found.")
             return
 
-        iterations = sd.askinteger("Taubin Smoothing", "Number of iterations:", minvalue=1, maxvalue=100, initialvalue=10)
-        if iterations is None:
-            return
-        lambda_factor = sd.askfloat("Lambda (positive)", "Enter λ (e.g., 0.5):", minvalue=0.0, maxvalue=1.0, initialvalue=0.5)
-        if lambda_factor is None:
-            return
-        mu_factor = sd.askfloat("Mu (negative)", "Enter μ (e.g., -0.53):", maxvalue=0.0, initialvalue=-0.53)
-        if mu_factor is None:
-            return
-
-        def run_taubin():
-            status_var.set("🛠️ Applying Taubin smoothing...")
-            root.update_idletasks()
-
-            start = time.time()
-            if "original_vertices" not in app_state:
-                app_state["original_vertices"] = copy.deepcopy(app_state["vertices"])
-            
-            from mesh_operations import taubin_smoothing
-            vertices, diff_vectors = taubin_smoothing(
-                app_state["vertices"],
-                app_state["edges"],
-                app_state["triangles"],
-                iterations=iterations,
-                lambda_factor=lambda_factor,
-                mu_factor=mu_factor
-            )
-            app_state["vertices"] = vertices
-            end = time.time()
-            runtime = end - start
-
-            moved_distances = np.linalg.norm(diff_vectors, axis=1)
-            max_move = moved_distances.max()
-
-            messagebox.showinfo(
-                "Taubin Smoothing", 
-                f"Smoothing done.\nMax vertex move: {max_move:.4f}\nRuntime: {runtime:.6f} seconds"
-            )
-
-            status_var.set("✅ Taubin smoothing complete.")
-
-            def show_updated():
-                viewer.plot_mesh_from_data(app_state["vertices"], app_state["triangles"])
-
-            threading.Thread(target=show_updated, daemon=True).start()
-
-        threading.Thread(target=run_taubin, daemon=True).start()
-
-    def compute_point_mesh_distance_gui():
-        if not app_state["vertices"]:
-            messagebox.showwarning("No Data", "Please build the structure first.")
-            return
-
-        point_str = simpledialog.askstring("Input Point", "Enter point coordinates as x,y,z:")
-        if point_str is None:
-            return
-
-        try:
-            point = np.array([float(c.strip()) for c in point_str.split(",")])
-            if point.shape != (3,):
-                raise ValueError
-        except Exception:
-            messagebox.showerror("Invalid Input", "Please enter a valid 3D point as x,y,z.")
-            return
-
-        dist, closest_point = point_to_mesh_distance(point, app_state["vertices"], app_state["triangles"])
-        viewer.plot_point_and_closest_on_mesh(app_state["vertices"], app_state["triangles"], point, closest_point)
-
-        messagebox.showinfo(
-            "Point-Mesh Distance",
-            f"Shortest distance: {dist:.6f}\n"
-            f"Closest point on mesh: {closest_point}"
+        # Ask for percent reduction instead of target face count
+        percent, ok = QInputDialog.getDouble(
+            self, "QEM Simplification", "Reduction percent (0..100):",
+            50.0, 1.0, 99.0, 1
         )
-        status_var.set("✅ Point-mesh distance computed.")
-
-    def compute_dihedral_angles():
-        if not app_state["vertices"]:
-            messagebox.showwarning("No Data", "Please build the structure first.")
+        if not ok:
             return
 
-        from mesh_operations import compute_dihedral_angles
+        self.signals.log.emit(f"🛠️ Simplifying mesh (QEM) by {percent:.1f}%...")
+        self.progress.show()
+        self.progress.setValue(0)
+        self.action_qem.setEnabled(False)
 
-        status_var.set("🛠️ Computing dihedral angles...")
-        root.update_idletasks()
+        def worker():
+            try:
+                v_np, f_np = vertices_triangles_to_numpy(self.state["vertices"], self.state["triangles"])
+                n_faces = f_np.shape[0]
 
-        MeshOperations.compute_triangle_normals(app_state["vertices"], app_state["triangles"])
+                # Compute target faces based on percent reduction
+                target = max(1, int(n_faces * (1.0 - percent / 100.0)))
 
-        angles = compute_dihedral_angles(app_state["edges"], app_state["triangles"])
+                # Python callback for progress
+                def progress_cb(p):
+                    self.signals.progress.emit(p)
+                    print(f"[QEM] Progress: {p}%")
 
-        if not angles:
-            messagebox.showinfo("Dihedral Angles", "No angles could be computed.")
-            status_var.set("✅ Computation complete.")
-            return
+                # Run C++ QEM simplify_mesh with callback
+                new_v_np, new_f_np = QEM.simplify_mesh(v_np, f_np, target, progress_cb)
 
-        # Basic statistics
-        angle_values = [a for a in angles.values() if a is not None]
-        if not angle_values:
-            messagebox.showinfo("Dihedral Angles", "No non-boundary edges found.")
-            status_var.set("✅ Computation complete.")
-            return
+                # Convert back to Vertex/Triangle objects
+                new_vertices = [Vertex(coords=new_v_np[i], index=i) for i in range(len(new_v_np))]
+                new_triangles = [Triangle(vertex_indices=list(new_f_np[i]), index=i) for i in range(len(new_f_np))]
 
-        angle_array = np.array(angle_values)
-        msg = (
-            f"Computed angles for {len(angle_array)} edges.\n"
-            f"Min: {angle_array.min():.2f}°\n"
-            f"Max: {angle_array.max():.2f}°\n"
-            f"Mean: {angle_array.mean():.2f}°\n"
-            f"Std: {angle_array.std():.2f}°"
-        )
-        messagebox.showinfo("Dihedral Angles Statistics", msg)
-        status_var.set("✅ Dihedral angles computed.")
+                # Recompute normals
+                for t in new_triangles:
+                    t.recompute_normal(new_vertices)
 
-    def detect_and_smooth_cables():
-        if not app_state["vertices"]:
-            messagebox.showwarning("No Data", "Please build the structure first.")
-            return
+                self.state["vertices"] = new_vertices
+                self.state["triangles"] = new_triangles
 
-        from mesh_operations import detect_tubular_regions, taubin_smoothing_masked
-        from viewer import plot_mesh_with_vertex_mask  # new function for coloring cables
+                self.signals.log.emit(f"✅ QEM complete. Faces: {len(new_triangles)}")
 
-        # Prompt user for parameters (with default values)
-        k_ring = simpledialog.askinteger("Parameter Input", "Neighborhood k_ring:", initialvalue=8, minvalue=1, maxvalue=10)
-        if k_ring is None:  # user cancelled
-            return
+                # Update plot (white colors)
+                pts, _ = vertices_triangles_to_numpy(new_vertices, new_triangles)
+                colors = np.ones((len(new_vertices), 3))
+                self.signals.mesh_update.emit(pts, colors)
 
-        eig_ratio_thresh = simpledialog.askfloat("Parameter Input", "Eigenvalue ratio threshold (eig_ratio_thresh):", initialvalue=0.25, minvalue=0.0, maxvalue=1.0)
-        if eig_ratio_thresh is None:
-            return
+                self.signals.progress.emit(100)
+                print("[QEM] Simplification done. 100%")
 
-        radius_thresh = simpledialog.askfloat("Parameter Input", "Max radius threshold (radius_thresh), or 0 for no limit:", initialvalue=0, minvalue=0.0)
-        if radius_thresh is None:
-            return
-        if radius_thresh == 0:
-            radius_thresh = None  # disable radius filtering
+            except Exception as e:
+                self.signals.log.emit(f"❌ QEM error: {e}")
+                self.signals.show_message.emit("QEM Error", str(e))
 
-        min_component_size = simpledialog.askinteger("Parameter Input", "Min component size:", initialvalue=30, minvalue=1)
-        if min_component_size is None:
-            return
+            finally:
+                self.action_qem.setEnabled(True)
+                self.progress.hide()
 
-        status_var.set("🔎 Detecting cable-like regions...")
-        root.update_idletasks()
+        threading.Thread(target=worker, daemon=True).start()
 
-        mask, scores = detect_tubular_regions(
-            app_state["vertices"],
-            app_state["edges"],
-            app_state["triangles"],
-            k_ring=k_ring,
-            eig_ratio_thresh=eig_ratio_thresh,
-            radius_thresh=radius_thresh,
-            min_component_size=min_component_size
-        )
-
-        num_candidates = int(mask.sum())
-        status_var.set(f"Found {num_candidates} candidate vertices for cables.")
-        if num_candidates == 0:
-            messagebox.showinfo("Result", "No cable-like regions detected with current thresholds.")
-            return
-
-        # --- Show preview with cables in red ---
-        threading.Thread(
-            target=lambda: plot_mesh_with_vertex_mask(
-                app_state["vertices"],
-                app_state["triangles"],
-                mask
-            ),
-            daemon=True
-        ).start()
-
-        status_var.set("🧼 Smoothing detected cable regions...")
-        root.update_idletasks()
-
-        vertices_new, diff = taubin_smoothing_masked(
-            app_state["vertices"],
-            app_state["edges"],
-            app_state["triangles"],
-            mask,
-            iterations=30,
-            lambda_factor=0.6,
-            mu_factor=-0.62
-        )
-
-        app_state["vertices"] = vertices_new
-        status_var.set("✅ Cable smoothing complete.")
-
-        threading.Thread(
-            target=lambda: viewer.plot_mesh_from_data(
-                app_state["vertices"],
-                app_state["triangles"]
-            ),
-            daemon=True
-        ).start()
-
-        messagebox.showinfo(
-            "Done",
-            f"Detected {num_candidates} vertices in cable regions; smoothing applied."
-        )
-
-    def QEM_simplify_mesh():
-        if app_state["vertices"] is None:
-            messagebox.showwarning("No Data", "Please build the structure first.")
-            return
-
-        target_faces = sd.askinteger("QEM Mesh Simplification", "Target number of faces:", 
-                                    minvalue=100, maxvalue=1000000, initialvalue=5000)
-        if target_faces is None:
-            return
-
-        status_var.set("🛠️ Simplifying mesh...")
-        root.update_idletasks()
-
-        def run_simplification():
-            vertices_np, faces_np = vertices_triangles_to_numpy(app_state["vertices"], app_state["triangles"])
-
-            # Run the C++ simplifier
-            new_vertices_np, new_faces_np = QEM.simplify_mesh(vertices_np, faces_np, target_faces)
-
-            # Convert back to Vertex/Triangle objects
-            new_vertices = [Vertex(coords=new_vertices_np[i], index=i) for i in range(len(new_vertices_np))]
-            new_triangles = [Triangle(vertex_indices=list(new_faces_np[i]), index=i) for i in range(len(new_faces_np))]
-
-            # Recompute normals
-            for t in new_triangles:
-                t.recompute_normal(new_vertices)
-
-            # Update app_state
-            app_state["vertices"] = new_vertices
-            app_state["triangles"] = new_triangles
-
-            status_var.set(f"✅ QEM Simplification complete. Faces: {len(new_triangles)}")
-
-            # Refresh viewer in main thread
-            root.after(0, lambda: viewer.plot_mesh_from_data(app_state["vertices"], app_state["triangles"]))
-
-        threading.Thread(target=run_simplification, daemon=True).start()
+def main():
+    # Required for PyVista + Qt to cooperate nicely
+    pv.set_plot_theme("dark")
+    app = QApplication(sys.argv)
+    w = MeshApp()
+    w.show()
+    sys.exit(app.exec_())
 
 
-    btn_load = tk.Button(root, text="Load STL File", command=load_mesh, height=2, width=20)
-    btn_load.pack(expand=True)
-
-    root.mainloop()
+if __name__ == "__main__":
+    main()

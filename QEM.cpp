@@ -9,11 +9,9 @@
 #include <unordered_map>
 #include <pybind11/functional.h>
 
-
 namespace py = pybind11;
 
 // ==================== QEM Utilities ====================
-
 Eigen::Matrix4d compute_plane_quadric(const Eigen::Vector3d &v0,
                                       const Eigen::Vector3d &v1,
                                       const Eigen::Vector3d &v2)
@@ -31,14 +29,13 @@ Eigen::Vector3d compute_optimal_position(const Eigen::Matrix4d &Q)
 {
     Eigen::Matrix3d A = Q.block<3,3>(0,0);
     Eigen::Vector3d b = -Q.block<3,1>(0,3);
-    if (A.determinant() > 1e-12)
+    if(A.determinant() > 1e-12)
         return A.colPivHouseholderQr().solve(b);
     else
         return Eigen::Vector3d::Zero(); // fallback
 }
 
 // ==================== Edge Structure ====================
-
 struct Edge {
     int v1, v2;
     double cost;
@@ -54,10 +51,10 @@ struct CompareEdge {
 };
 
 // ==================== Simplify Mesh ====================
-
 py::tuple simplify_mesh(py::array_t<double> vertices_np,
                         py::array_t<int> faces_np,
-                        int target_faces)
+                        int target_faces,
+                        std::function<void(int)> progress_callback = nullptr)
 {
     auto v_buf = vertices_np.request();
     auto f_buf = faces_np.request();
@@ -80,9 +77,7 @@ py::tuple simplify_mesh(py::array_t<double> vertices_np,
     // 1. Compute per-vertex QEM
     std::vector<Eigen::Matrix4d> qem(n_vertices, Eigen::Matrix4d::Zero());
     for(int i=0;i<n_faces;i++){
-        int a = faces(i,0);
-        int b = faces(i,1);
-        int c = faces(i,2);
+        int a = faces(i,0), b = faces(i,1), c = faces(i,2);
         Eigen::Matrix4d K = compute_plane_quadric(vertices.row(a), vertices.row(b), vertices.row(c));
         qem[a] += K; qem[b] += K; qem[c] += K;
     }
@@ -112,6 +107,9 @@ py::tuple simplify_mesh(py::array_t<double> vertices_np,
     std::vector<bool> removed_face(n_faces,false);
 
     int current_faces = n_faces;
+    int total_faces_to_collapse = n_faces - target_faces;
+    int last_percent = -1;
+
     while(current_faces > target_faces && !heap.empty()){
         Edge e = heap.top(); heap.pop();
         if(removed_vertex[e.v1] || removed_vertex[e.v2]) continue;
@@ -122,7 +120,6 @@ py::tuple simplify_mesh(py::array_t<double> vertices_np,
         qem[keep] += qem[remove];
         removed_vertex[remove] = true;
 
-        // Update faces
         for(int i=0;i<n_faces;i++){
             if(removed_face[i]) continue;
             for(int j=0;j<3;j++){
@@ -131,6 +128,14 @@ py::tuple simplify_mesh(py::array_t<double> vertices_np,
             if(faces(i,0)==faces(i,1) || faces(i,1)==faces(i,2) || faces(i,2)==faces(i,0)){
                 removed_face[i] = true;
                 current_faces--;
+            }
+        }
+
+        if(progress_callback){
+            int percent = int(100.0 * (total_faces_to_collapse - (current_faces - target_faces)) / total_faces_to_collapse);
+            if(percent != last_percent){
+                progress_callback(percent);
+                last_percent = percent;
             }
         }
     }
@@ -180,5 +185,24 @@ py::tuple simplify_mesh(py::array_t<double> vertices_np,
 }
 
 PYBIND11_MODULE(QEM, m) {
-    m.def("simplify_mesh", &simplify_mesh, "Simplify mesh using QEM (C++ accelerated)");
+    m.def("simplify_mesh",
+      [](py::array_t<double> vertices_np,
+         py::array_t<int> faces_np,
+         int target_faces,
+         py::function progress_callback = py::none())
+      {
+          std::function<void(int)> cb = nullptr;
+          if (!progress_callback.is_none()) {
+              cb = [progress_callback](int p){
+                  py::gil_scoped_acquire acquire;
+                  progress_callback(p);
+              };
+          }
+          return simplify_mesh(vertices_np, faces_np, target_faces, cb);
+      },
+      py::arg("vertices_np"),
+      py::arg("faces_np"),
+      py::arg("target_faces"),
+      py::arg("progress_callback") = py::none(),
+      "Simplify mesh using QEM (C++ accelerated) with optional progress callback");
 }
