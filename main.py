@@ -1,31 +1,53 @@
 import sys
-import os
 import copy
-import time
 import threading
 import numpy as np
 import pyvista as pv
-import re
-
-# If you prefer PySide6, swap the imports below (see comment a few lines later).
-
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QAction, QFileDialog, QMessageBox, QInputDialog,
-    QTextEdit, QDockWidget, QProgressBar, QWidget, QVBoxLayout, QLabel
-)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
-
 from pyvistaqt import QtInteractor
 
-# --- Your project imports (unchanged) ---
-from mesh_data_structure import build_mesh_from_stl, Vertex, Triangle, Edge
-from mesh_sanity_check import sanity_check_mesh, generate_sanity_report
+from PyQt5.QtWidgets import (
+    QApplication, 
+    QMainWindow, 
+    QAction, 
+    QFileDialog, 
+    QMessageBox, 
+    QInputDialog,
+    QTextEdit, 
+    QDockWidget,
+    QProgressBar, 
+    QWidget, 
+    QVBoxLayout, 
+    QLabel
+)
+from PyQt5.QtCore import (Qt, 
+    QTimer, 
+    pyqtSignal,
+    QObject
+)
+from mesh_data_structure import (
+    build_mesh_from_stl, 
+    Vertex, 
+    Triangle, 
+    Edge
+)
+from mesh_sanity_check import (
+    sanity_check_mesh, 
+    generate_sanity_report
+)
 from mesh_operations import (
-    MeshOperations, laplacian_smoothing, taubin_smoothing, vertices_triangles_to_numpy,
-    compute_dihedral_angles, point_to_mesh_distance, detect_tubular_regions,
+    MeshOperations, 
+    laplacian_smoothing, 
+    taubin_smoothing, 
+    vertices_triangles_to_numpy,
+    compute_dihedral_angles, 
+    point_to_mesh_distance, 
+    detect_tubular_regions,
     taubin_smoothing_masked
 )
-from mesh_export import save_mesh_to_json, save_mesh_to_stl
+from mesh_export import (
+    save_mesh_to_json, 
+    save_mesh_to_stl
+)
 
 try:
     import QEM
@@ -170,9 +192,9 @@ class MeshApp(QMainWindow):
         # --- App state (kept same semantics as your Tk app) ---
         self.state = {
             "file_path": None,
-            "vertices": None,     # list[Vertex]
-            "edges": None,        # your edge structure
-            "triangles": None,    # list[Triangle]
+            "vertices": None,
+            "edges": None,
+            "triangles": None,
             "original_vertices": None,
         }
 
@@ -207,7 +229,7 @@ class MeshApp(QMainWindow):
 
     def set_actions_enabled_for_loaded(self, enabled: bool):
         self.action_build.setEnabled(enabled)
-        self.action_export.setEnabled(False)  # enable after built
+        self.action_export.setEnabled(False)
         self.action_sanity.setEnabled(False)
         self.action_lap.setEnabled(False)
         self.action_taubin.setEnabled(False)
