@@ -1,7 +1,10 @@
-pyvista
 numpy
+pyvista
 pyvistaqt
 numpy-stl
+pybind11
 setuptools
 wheel
-pybind11
+PyQt5
+numba
+scipy

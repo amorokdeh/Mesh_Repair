@@ -1,5 +1,6 @@
 import numpy as np
 import pyvista as pv
+from numba import njit, prange
 
 class Vertex:
     def __init__(self, coords, index):
@@ -31,91 +32,100 @@ class Triangle:
         edge2 = v2 - v0
         normal = np.cross(edge1, edge2)
         norm = np.linalg.norm(normal)
-
         self.normal = normal / norm if norm != 0 else np.array([0, 0, 0])
 
-# mesh_data_structure.py
+# ------------------------------
+# Numba-optimized function for triangle normals
+@njit(parallel=True)
+def compute_triangle_normals(vertices_coords, triangles_idx):
+    n_tri = triangles_idx.shape[0]
+    normals = np.zeros((n_tri, 3))
+    for i in prange(n_tri):
+        v0 = vertices_coords[triangles_idx[i, 0]]
+        v1 = vertices_coords[triangles_idx[i, 1]]
+        v2 = vertices_coords[triangles_idx[i, 2]]
+        e1 = v1 - v0
+        e2 = v2 - v0
+        n = np.cross(e1, e2)
+        norm = np.linalg.norm(n)
+        if norm > 0:
+            n /= norm
+        normals[i] = n
+    return normals
+
+# ------------------------------
 def build_mesh_from_stl(file_path, progress_callback=None):
     mesh = pv.read(file_path)
     points = mesh.points
-    faces = mesh.faces.reshape((-1, 4))[:, 1:4]  # assuming triangular mesh
+    faces = mesh.faces.reshape((-1, 4))[:, 1:4]  # triangular faces only
 
+    n_points = len(points)
+    n_faces = len(faces)
     total_steps = (
-    len(points) +          # vertex creation
-    len(faces) +           # triangle creation
-    len(faces) +           # edge generation (loop once per triangle)
-    len(faces) * 3 +       # normal computation (once per triangle)
-    len(faces) * 3         # vertex updates (each triangle has 3 vertices)
+        n_points +          # vertex creation
+        n_faces +           # triangle creation
+        n_faces +           # edge generation
+        n_faces * 3 +       # normal computation
+        n_faces * 3         # vertex updates
     )
     step = 0
 
-    # Build vertices list
-    vertices = []
-    for i in range(len(points)):
-        vertices.append(Vertex(coords=points[i], index=i))
-        step += 1
-        if i % 100 == 0 and progress_callback:
-            percent = min(100, int((step / total_steps) * 100))
-            progress_callback(f"{percent}")
+    # --- Build vertices ---
+    vertices = [Vertex(coords=points[i], index=i) for i in range(n_points)]
+    step += n_points
+    if progress_callback:
+        progress_callback("Building vertices...")
 
-    # Build triangles list
-    triangles = []
-    for i, face in enumerate(faces):
-        triangles.append(Triangle(vertex_indices=face.tolist(), index=i))
-        step += 1
-        if i % 100 == 0 and progress_callback:
-            percent = int((step / total_steps) * 100)
-            progress_callback(f"{percent}")
+    # --- Build triangles ---
+    triangles = [Triangle(vertex_indices=faces[i].tolist(), index=i) for i in range(n_faces)]
+    step += n_faces
+    if progress_callback:
+        progress_callback("Building triangles...")
 
-    # Build Unique Edges and Link to Triangles
-    edge_dict = {}  # Helps avoid duplicate edge creation
-    edges = []  # List of unique Edge instances
-
+    # --- Build unique edges ---
+    edge_dict = {}
+    edges = []
     for tri in triangles:
         vids = tri.vertex_indices
-        edge_vertices = [
-            (vids[1], vids[2]),
-            (vids[2], vids[0]),
-            (vids[0], vids[1]),
-        ]
-        for i, (v_start, v_end) in enumerate(edge_vertices):
-            key = tuple(sorted((v_start, v_end))) # Sort to ensure uniqueness (undirected edge)
+        edge_vertices = [(vids[1], vids[2]), (vids[2], vids[0]), (vids[0], vids[1])]
+        for i, (v1, v2) in enumerate(edge_vertices):
+            key = tuple(sorted((v1, v2)))
             if key in edge_dict:
-                # Edge already exists, reuse it
-                edge_index = edge_dict[key]
-                edges[edge_index].triangles.append(tri.index)
-                tri.edge_indices[i] = edge_index
+                ei = edge_dict[key]
+                edges[ei].triangles.append(tri.index)
+                tri.edge_indices[i] = ei
             else:
-                # Create new edge and assign it
-                edge_index = len(edges)
-                edge = Edge(v1=key[0], v2=key[1])
-                edge.triangles.append(tri.index)
-                edges.append(edge)
-                edge_dict[key] = edge_index
-                tri.edge_indices[i] = edge_index
+                ei = len(edges)
+                e = Edge(v1=key[0], v2=key[1])
+                e.triangles.append(tri.index)
+                edges.append(e)
+                edge_dict[key] = ei
+                tri.edge_indices[i] = ei
         step += 1
+        if step % 100 == 0 and progress_callback:
+            percent = int((step / total_steps) * 100)
+            progress_callback(f"{percent}")
     if progress_callback:
         progress_callback("Building edges...")
 
-    # Update Vertex Data with Triangle Relationships
+    # --- Update vertex data ---
     for tri in triangles:
         for v_idx in tri.vertex_indices:
-            vertices[v_idx].valence += 1  # Increase how many triangles touch this vertex
-            vertices[v_idx].triangle_indices.append(tri.index) # Store triangle ID
+            vertices[v_idx].valence += 1
+            vertices[v_idx].triangle_indices.append(tri.index)
         step += 1
+        if step % 100 == 0 and progress_callback:
+            percent = int((step / total_steps) * 100)
+            progress_callback(f"{percent}")
     if progress_callback:
         progress_callback("Assigning triangle refs...")
 
-    # Compute Triangle Surface Normals
-    for tri in triangles:
-        p0 = vertices[tri.vertex_indices[0]].coords
-        p1 = vertices[tri.vertex_indices[1]].coords
-        p2 = vertices[tri.vertex_indices[2]].coords
-        edge1 = p1 - p0
-        edge2 = p2 - p0
-        n = np.cross(edge1, edge2)
-        norm = np.linalg.norm(n)
-        tri.normal = n / norm if norm > 0 else np.array([0,0,0])
+    # --- Compute triangle normals using Numba ---
+    verts_coords = np.array([v.coords for v in vertices])
+    tris_idx = np.array([tri.vertex_indices for tri in triangles])
+    normals = compute_triangle_normals(verts_coords, tris_idx)
+    for i, tri in enumerate(triangles):
+        tri.normal = normals[i]
         step += 1
         if step % 200 == 0 and progress_callback:
             percent = int((step / total_steps) * 100)
