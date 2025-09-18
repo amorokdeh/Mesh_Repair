@@ -55,6 +55,13 @@ except Exception:
     QEM = None
     print("Warning: QEM extension not found; simplification will be unavailable.")
 
+try:
+    import curvature_simplification as CURV
+except Exception:
+    CURV = None
+    print("Warning: curvature_simplification extension not found; curvature simplification unavailable.")
+
+
 class WorkerSignals(QObject):
     progress = pyqtSignal(int)
     finished = pyqtSignal()
@@ -189,6 +196,11 @@ class MeshApp(QMainWindow):
         self.action_qem.triggered.connect(self.qem_simplify_mesh)
         actions_menu.addAction(self.action_qem)
 
+        self.action_curvature = QAction("Simplify Mesh (Curvature)", self)
+        self.action_curvature.setEnabled(False and (CURV is not None))
+        self.action_curvature.triggered.connect(self.curvature_simplify_mesh)
+        actions_menu.addAction(self.action_curvature)
+
         # --- App state (kept same semantics as your Tk app) ---
         self.state = {
             "file_path": None,
@@ -237,6 +249,8 @@ class MeshApp(QMainWindow):
         self.action_dihedral.setEnabled(False)
         self.action_pointdist.setEnabled(False)
         self.action_qem.setEnabled(False and (QEM is not None))
+        self.action_curvature.setEnabled(False and (CURV is not None))
+
 
     def set_actions_enabled_for_built(self, enabled: bool):
         self.action_export.setEnabled(enabled)
@@ -247,6 +261,8 @@ class MeshApp(QMainWindow):
         self.action_dihedral.setEnabled(enabled)
         self.action_pointdist.setEnabled(enabled)
         self.action_qem.setEnabled(enabled and (QEM is not None))
+        self.action_curvature.setEnabled(enabled and (CURV is not None))
+
 
     def draw_mesh_from_vertices_triangles(self):
         """Render current state vertices/triangles in the embedded plotter."""
@@ -753,6 +769,98 @@ class MeshApp(QMainWindow):
                 self.signals.error.emit(f"Cable detection/smoothing error: {e}")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def curvature_simplify_mesh(self):
+        if not self.state["vertices"]:
+            QMessageBox.warning(self, "No Data", "Please build the structure first.")
+            return
+        if CURV is None:
+            QMessageBox.critical(self, "Curvature Not Available", "curvature_simplification extension not found.")
+            return
+
+        # Ask for percent reduction
+        reduction_percent, ok = QInputDialog.getDouble(
+            self, "Curvature Simplification",
+            "Reduction percent (0..100):", 50.0, 1.0, 99.0, 1
+        )
+        if not ok:
+            return
+
+        self.signals.log.emit(f"🛠️ Simplifying mesh (Curvature) by {reduction_percent:.1f}%...")
+        self.progress.show()
+        self.progress.setValue(0)
+        self.action_curvature.setEnabled(False)
+
+        def worker():
+            try:
+                v_np, f_np = vertices_triangles_to_numpy(self.state["vertices"], self.state["triangles"])
+                n_faces = f_np.shape[0]
+                target_faces = max(1, int(n_faces * (1.0 - reduction_percent / 100.0)))
+
+                # Progress callback
+                def progress_cb(p):
+                    self.signals.progress.emit(p)
+
+                # Run C++ curvature simplification
+                new_v_np, new_f_np = CURV.simplify_mesh_curvature(
+                    v_np, f_np, target_faces,
+                    1.0, 10.0, 2.0,  # alpha, beta, boundary_penalty
+                    progress_cb
+                )
+
+                # Convert back to Vertex/Triangle
+                new_vertices = [Vertex(coords=new_v_np[i], index=i) for i in range(len(new_v_np))]
+                new_triangles = [Triangle(vertex_indices=list(new_f_np[i]), index=i) for i in range(len(new_f_np))]
+
+                # Recompute normals
+                for t in new_triangles:
+                    t.recompute_normal(new_vertices)
+
+                # Rebuild edges
+                edge_dict = {}
+                new_edges = []
+                for tri in new_triangles:
+                    vids = tri.vertex_indices
+                    edge_vertices = [(vids[1], vids[2]), (vids[2], vids[0]), (vids[0], vids[1])]
+                    for i, (v_start, v_end) in enumerate(edge_vertices):
+                        key = tuple(sorted((v_start, v_end)))
+                        if key in edge_dict:
+                            edge_index = edge_dict[key]
+                            new_edges[edge_index].triangles.append(tri.index)
+                            tri.edge_indices[i] = edge_index
+                        else:
+                            edge_index = len(new_edges)
+                            edge = Edge(v1=key[0], v2=key[1])
+                            edge.triangles.append(tri.index)
+                            new_edges.append(edge)
+                            edge_dict[key] = edge_index
+                            tri.edge_indices[i] = edge_index
+
+                # Update state
+                self.state["vertices"] = new_vertices
+                self.state["triangles"] = new_triangles
+                self.state["edges"] = new_edges
+
+                self.signals.log.emit(f"✅ Curvature simplification complete. Faces: {len(new_triangles)}")
+
+                # Update viewer
+                pts, _ = vertices_triangles_to_numpy(new_vertices, new_triangles)
+                colors = np.ones((len(new_vertices), 3))
+                self.signals.mesh_update.emit(pts, colors)
+
+                self.signals.progress.emit(100)
+
+            except Exception as e:
+                self.signals.log.emit(f"❌ Curvature simplification error: {e}")
+                self.signals.show_message.emit("Curvature Error", str(e))
+
+            finally:
+                self.action_curvature.setEnabled(True)
+                self.progress.hide()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
 
     def qem_simplify_mesh(self):
         if not self.state["vertices"]:
