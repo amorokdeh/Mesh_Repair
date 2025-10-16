@@ -1,0 +1,10 @@
+numpy
+pyvista
+pyvistaqt
+numpy-stl
+pybind11
+setuptools
+wheel
+PyQt5
+numba
+scipy
