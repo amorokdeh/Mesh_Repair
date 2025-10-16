@@ -1,8 +1,0 @@
-{
-    "files.associations": {
-        "*.embeddedhtml": "html",
-        "tuple": "cpp",
-        "vector": "cpp",
-        "limits": "cpp"
-    }
-}
