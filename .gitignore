@@ -6,4 +6,4 @@ exported_mesh.json
 sanity_check_report.txt
 *.stl
 *.pyc
-+.pyd
+*.pyd
