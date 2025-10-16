@@ -17,7 +17,9 @@ from PyQt5.QtWidgets import (
     QProgressBar, 
     QWidget, 
     QVBoxLayout, 
-    QLabel
+    QLabel,
+    QDialog,
+    QPushButton
 )
 from PyQt5.QtCore import (Qt, 
     QTimer, 
@@ -42,7 +44,8 @@ from mesh_operations import (
     compute_dihedral_angles, 
     point_to_mesh_distance, 
     detect_tubular_regions,
-    taubin_smoothing_masked
+    taubin_smoothing_masked,
+    fill_mesh_holes
 )
 from mesh_export import (
     save_mesh_to_json, 
@@ -166,6 +169,11 @@ class MeshApp(QMainWindow):
         self.action_sanity.triggered.connect(self.sanity_check)
         actions_menu.addAction(self.action_sanity)
 
+        self.action_fill = QAction("Fill Holes", self)
+        self.action_fill.setEnabled(False)
+        self.action_fill.triggered.connect(self.fill_holes_preview)
+        actions_menu.addAction(self.action_fill)
+        
         self.action_lap = QAction("Laplacian Smoothing", self)
         self.action_lap.setEnabled(False)
         self.action_lap.triggered.connect(self.laplacian_smoothing_gui)
@@ -255,6 +263,7 @@ class MeshApp(QMainWindow):
     def set_actions_enabled_for_built(self, enabled: bool):
         self.action_export.setEnabled(enabled)
         self.action_sanity.setEnabled(enabled)
+        self.action_fill.setEnabled(enabled)
         self.action_lap.setEnabled(enabled)
         self.action_taubin.setEnabled(enabled)
         self.action_cables.setEnabled(enabled)
@@ -322,7 +331,7 @@ class MeshApp(QMainWindow):
             return
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Mesh", "", "JSON (*.json);;STL (*.stl)"
+            self, "Export Mesh", "", "STL (*.stl);;JSON (*.json)"
         )
         if not path:
             return
@@ -431,9 +440,10 @@ class MeshApp(QMainWindow):
         self.log("🧪 Running sanity check...")
 
         signals = WorkerSignals()
-        # Add a custom signal for sending the report
         if not hasattr(signals, "report_ready"):
-            signals.report_ready = pyqtSignal(str)  
+            signals.report_ready = pyqtSignal(str)
+        if not hasattr(signals, "mesh_update"):
+            signals.mesh_update = pyqtSignal(object, object) 
 
         # Connect signals
         signals.progress.connect(self.progress.setValue)
@@ -441,6 +451,7 @@ class MeshApp(QMainWindow):
         signals.finished.connect(lambda: self.log("✅ Sanity check complete."))
         signals.log.connect(self.log)
         signals.report_ready.connect(self._show_sanity_report)  # will show the report
+        signals.mesh_update.connect(self._preview_sanity_mesh)
 
         def worker():
             import time
@@ -457,6 +468,14 @@ class MeshApp(QMainWindow):
                 # Send the report to the main thread
                 signals.report_ready.emit(report_msg)
 
+                # Create colored mesh ---
+                pts = np.array([v.coords for v in self.state["vertices"]])
+                colors = np.tile(np.array([0.8, 0.95, 1.0]), (len(self.state["vertices"]), 1))
+                if results["boundary_vertices"]:
+                    colors[list(results["boundary_vertices"])] = np.array(pv.Color("red").int_rgb) / 255.0
+
+                signals.mesh_update.emit(pts, colors)
+
             except Exception as e:
                 signals.log.emit(f"❌ Sanity check error: {e}")
                 signals.error.emit(str(e))
@@ -468,13 +487,51 @@ class MeshApp(QMainWindow):
 
 
     # Helper method in your class to show the report safely in main thread
+
     def _show_sanity_report(self, msg):
         try:
             with open("sanity_check_report.txt", "w", encoding="utf-8") as f:
                 f.write(msg)
         except Exception as e:
             self.log(f"⚠️ Could not save report: {e}")
-        QMessageBox.information(self, "Sanity Check Result", msg)
+
+        # --- Custom styled dialog instead of QMessageBox ---
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Sanity Check Result")
+        dlg.resize(800, 600)  # make it large enough
+
+        layout = QVBoxLayout(dlg)
+
+        text_box = QTextEdit()
+        text_box.setReadOnly(True)
+        text_box.setPlainText(msg)
+        # Dark background + white text styling
+        text_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #121212;
+                color: #ffffff;
+                font-family: Consolas, monospace;
+                font-size: 12pt;
+                border: none;
+            }
+        """)
+
+        # Add a Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+
+        layout.addWidget(text_box)
+        layout.addWidget(close_btn)
+
+        dlg.exec_()
+
+
+    def _preview_sanity_mesh(self, pts, colors):
+        """Update mesh preview with sanity-check coloring (red = hole boundary)."""
+        try:
+            self.signals.mesh_update.emit(pts, colors)
+        except Exception as e:
+            self.log(f"⚠️ Could not update sanity preview: {e}")
 
 
     def laplacian_smoothing_gui(self):
@@ -552,6 +609,72 @@ class MeshApp(QMainWindow):
 
             finally:
                 signals.finished.emit()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def fill_holes_preview(self):
+        if not self.state["vertices"]:
+            self.signals.show_message.emit("No Data", "Please build the structure first.")
+            return
+
+        self.signals.log.emit("🩹 Detecting and filling mesh holes...")
+
+        def worker():
+            try:
+                vertices = self.state["vertices"]
+                edges = self.state["edges"]
+                triangles = self.state["triangles"]
+
+                # Keep original triangle set
+                original_tri_indices = set(t.index for t in triangles)
+
+                # Fill holes
+                vertices_new, edges_new, triangles_new = fill_mesh_holes(vertices, edges, triangles, max_loop_size=200)
+
+                # Detect newly added triangles
+                new_triangles = [t for t in triangles_new if t.index not in original_tri_indices]
+
+                # Collect all vertices involved in new triangles
+                filled_vertex_indices = set()
+                for tri in new_triangles:
+                    filled_vertex_indices.update(tri.vertex_indices)
+
+                # --- Compact vertices to remove unused ---
+                used_vertex_ids = np.unique([vi for tri in triangles_new for vi in tri.vertex_indices])
+                old_to_new = -np.ones(len(vertices_new), dtype=int)
+                for new_idx, old_idx in enumerate(used_vertex_ids):
+                    old_to_new[old_idx] = new_idx
+
+                # Rebuild vertex list
+                compact_vertices = [vertices_new[i] for i in used_vertex_ids]
+
+                # Remap triangle vertex indices
+                for tri in triangles_new:
+                    tri.vertex_indices = [old_to_new[vi] for vi in tri.vertex_indices]
+
+                # Prepare colors
+                pts = np.array([v.coords for v in compact_vertices])
+                colors = np.tile(np.array([0.8, 0.95, 1.0]), (len(compact_vertices), 1))  # default color
+                if filled_vertex_indices:
+                    # map old indices to new compact indices
+                    filled_idx_list = [old_to_new[vi] for vi in filled_vertex_indices if old_to_new[vi] >= 0]
+                    colors[filled_idx_list] = np.array(pv.Color("red").int_rgb) / 255.0
+
+                # Emit mesh preview to UI
+                self.signals.mesh_update.emit(pts, colors)
+
+                # Update app state
+                self.state["vertices"] = compact_vertices
+                self.state["edges"] = edges_new
+                self.state["triangles"] = triangles_new
+
+                self.signals.log.emit(f"✅ Hole filling complete. {len(filled_vertex_indices)} vertices in filled holes.")
+                self.signals.show_message.emit(
+                    "Done", f"Filled holes affecting {len(filled_vertex_indices)} vertices."
+                )
+
+            except Exception as e:
+                self.signals.error.emit(f"Hole filling error: {e}")
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -645,15 +768,22 @@ class MeshApp(QMainWindow):
 
         self.log("🧮 Computing dihedral angles...")
 
+        signals = WorkerSignals()
+        if not hasattr(signals, "report_ready"):
+            signals.report_ready = pyqtSignal(str)
+
+        signals.report_ready.connect(self._show_dihedral_report)
+
         def worker():
             try:
                 MeshOperations.compute_triangle_normals(self.state["vertices"], self.state["triangles"])
                 angles = compute_dihedral_angles(self.state["edges"], self.state["triangles"])
                 vals = [a for a in angles.values() if a is not None]
+
                 if not vals:
-                    self.log("No non-boundary edges found.")
-                    QTimer.singleShot(0, lambda: QMessageBox.information(self, "Dihedral Angles", "No non-boundary edges."))
+                    signals.report_ready.emit("No non-boundary edges found.")
                     return
+
                 arr = np.array(vals)
                 msg = (
                     f"Computed {len(arr)} edges.\n"
@@ -661,12 +791,45 @@ class MeshApp(QMainWindow):
                     f"Mean: {arr.mean():.2f}°\nStd: {arr.std():.2f}°"
                 )
                 self.log("✅ Dihedral angles computed.")
-                QTimer.singleShot(0, lambda: QMessageBox.information(self, "Dihedral Angles Statistics", msg))
+                signals.report_ready.emit(msg)
+
             except Exception as e:
                 self.log(f"❌ Dihedral error: {e}")
-                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Error", str(e)))
+                signals.report_ready.emit(f"Error computing dihedral angles:\n{e}")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_dihedral_report(self, msg):
+        # Console log also
+        self.log(msg)
+
+        # Dialog with same style as sanity check
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Dihedral Angles Result")
+        dlg.resize(500, 400)
+
+        layout = QVBoxLayout(dlg)
+
+        text_box = QTextEdit()
+        text_box.setReadOnly(True)
+        text_box.setPlainText(msg)
+        text_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #121212;
+                color: #ffffff;
+                font-family: Consolas, monospace;
+                font-size: 12pt;
+                border: none;
+            }
+        """)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+
+        layout.addWidget(text_box)
+        layout.addWidget(close_btn)
+
+        dlg.exec_()
 
     def compute_point_mesh_distance_gui(self):
         if not self.state["vertices"]:
@@ -683,92 +846,252 @@ class MeshApp(QMainWindow):
             QMessageBox.critical(self, "Invalid Input", "Please enter a valid 3D point as x,y,z.")
             return
 
+        # Connect the update_preview signal to the UI handler only once
+        # (update_preview is pyqtSignal(object) defined in WorkerSignals)
+        if not hasattr(self, "_point_distance_connected") or not self._point_distance_connected:
+            self.signals.update_preview.connect(self._show_point_mesh_distance)
+            self._point_distance_connected = True
+
         def worker():
             try:
                 dist, closest = point_to_mesh_distance(point, self.state["vertices"], self.state["triangles"])
-                self.log(f"✅ Point-mesh distance: {dist:.6f}. Closest: {closest}")
-                QTimer.singleShot(0, lambda: QMessageBox.information(
-                    self, "Point-Mesh Distance",
-                    f"Shortest distance: {dist:.6f}\nClosest point on mesh: {closest}"
-                ))
-                # Visualize: add the two points as spheres
-                def draw_points():
-                    self.draw_mesh_from_vertices_triangles()
-                    pts = np.array([vv.coords for vv in self.state["vertices"]])
-                    r = 0.01 * np.linalg.norm(pts.max(0) - pts.min(0))
-                    self.plotter.add_mesh(pv.Sphere(radius=r, center=point), color="red")
-                    self.plotter.add_mesh(pv.Sphere(radius=r, center=closest), color="green")
-                    self.plotter.reset_camera()
-                QTimer.singleShot(0, draw_points)
+                result = {"dist": dist, "closest": closest, "point": point}
+                # Emit an object (dict) — update_preview accepts object types.
+                self.signals.update_preview.emit(result)
             except Exception as e:
-                self.log(f"❌ Distance error: {e}")
-                QTimer.singleShot(0, lambda: QMessageBox.critical(self, "Error", str(e)))
+                # Send error back as object so main thread can show it
+                self.signals.update_preview.emit({"error": str(e)})
 
         threading.Thread(target=worker, daemon=True).start()
+
+
+    def _show_point_mesh_distance(self, result):
+        """
+        Runs in the main GUI thread (connected to self.signals.update_preview).
+        Displays the result in a styled dialog and draws the two spheres on the plotter.
+        """
+        try:
+            if not isinstance(result, dict):
+                # safety fallback
+                QMessageBox.critical(self, "Error", "Unexpected result type from worker.")
+                return
+
+            if "error" in result:
+                QMessageBox.critical(self, "Error", result["error"])
+                return
+
+            dist = result["dist"]
+            closest = result["closest"]
+            point = result["point"]
+
+            # Log to app log
+            self.log(f"✅ Point-mesh distance: {dist:.6f}. Closest: {closest}")
+
+            # Styled result dialog (consistent with your sanity dialog style)
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Point-Mesh Distance Result")
+            dlg.resize(520, 300)
+
+            layout = QVBoxLayout(dlg)
+            text_box = QTextEdit()
+            text_box.setReadOnly(True)
+            text_box.setPlainText(
+                f"Shortest distance: {dist:.6f}\nClosest point on mesh: {closest}"
+            )
+            text_box.setStyleSheet("""
+                QTextEdit {
+                    background-color: #121212;
+                    color: #ffffff;
+                    font-family: Consolas, monospace;
+                    font-size: 11pt;
+                    border: none;
+                }
+            """)
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(dlg.accept)
+
+            layout.addWidget(text_box)
+            layout.addWidget(close_btn)
+            dlg.exec_()
+
+            # --- Visualization: draw spheres on the main plotter (main thread) ---
+            # Redraw current mesh from vertices/triangles then add spheres on top
+            try:
+                self.draw_mesh_from_vertices_triangles()
+            except Exception:
+                # fallback: build a quick mesh if draw helper not available
+                pts = np.array([v.coords for v in self.state["vertices"]])
+                faces = []
+                for t in self.state["triangles"]:
+                    faces.extend([3] + list(t.vertex_indices))
+                mesh = pv.PolyData(pts, np.array(faces))
+                self.plotter.clear()
+                self.plotter.add_mesh(mesh, color="#ccf5ff", show_edges=True, edge_color="#001f3f")
+                self.plotter.reset_camera()
+
+            # compute reasonable sphere radius
+            pts_all = np.array([vv.coords for vv in self.state["vertices"]])
+            bbox_size = np.linalg.norm(pts_all.max(axis=0) - pts_all.min(axis=0))
+            r = max(1e-6, 0.01 * bbox_size)
+
+            # Add sphere markers
+            try:
+                # Remove any previous marker actors with known names if you manage them,
+                # else these will simply sit on top until next redraw.
+                self.plotter.add_mesh(pv.Sphere(radius=r, center=point), color="red", name="query_point")
+                self.plotter.add_mesh(pv.Sphere(radius=r, center=closest), color="green", name="closest_point")
+                self.plotter.reset_camera()
+            except Exception as e:
+                # If plotter.add_mesh fails, log it but do not crash
+                self.log(f"⚠️ Could not draw marker spheres: {e}")
+
+        except Exception as e:
+            # safety: show any unexpected errors
+            self.log(f"❌ _show_point_mesh_distance error: {e}")
+            QMessageBox.critical(self, "Error", str(e))
+
+    def select_mesh_region(self, callback):
+        """
+        Let the user interactively select a region of the mesh using a draggable green box.
+        Once 'Apply' is clicked, the selection bounds are passed to the callback(bounds).
+        """
+        import pyvista as pv
+        from PyQt5.QtWidgets import QPushButton
+
+        # Create the selection box widget
+        bounds = self.plotter.bounds
+        box_widget = [None]  # mutable holder for callback closure
+        region_bounds = [None]
+
+        def _callback(box):
+            region_bounds[0] = box.bounds
+            return
+
+        # Add the box widget (no scaling_enabled argument!)
+        box_widget[0] = self.plotter.add_box_widget(
+            callback=_callback,
+            bounds=bounds,
+            color='green',
+            outline_translation=True
+        )
+
+        self.log("🟩 Adjust the green box to select a region. Click 'Apply' when ready.")
+
+        # --- Create floating Qt 'Apply' button ---
+        btn_apply = QPushButton("Apply", self)
+        btn_apply.setStyleSheet("""
+            QPushButton {
+                background-color: #2ecc71;
+                color: white;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #27ae60;
+            }
+        """)
+        btn_apply.resize(100, 36)
+        btn_apply.move(20, self.height() - 60)
+        btn_apply.show()
+
+        # --- Cleanup logic ---
+        def cleanup_after_selection():
+            try:
+                if box_widget[0]:
+                    self.plotter.remove_box_widget(box_widget[0])
+            except Exception:
+                pass
+            btn_apply.deleteLater()
+
+        # --- Apply selection ---
+        def apply_selection():
+            cleanup_after_selection()
+            if region_bounds[0] is not None:
+                callback(region_bounds[0])
+            else:
+                self.signals.log.emit("⚠️ No region selected.")
+
+        btn_apply.clicked.connect(apply_selection)
+
 
     def detect_and_smooth_cables(self):
         if not self.state["vertices"]:
             self.signals.show_message.emit("No Data", "Please build the structure first.")
             return
 
-        # User inputs
-        k_ring, ok = QInputDialog.getInt(self, "Detect Cables", "Neighborhood k_ring:", 8, 1, 10, 1)
-        if not ok: return
-        eig_ratio, ok = QInputDialog.getDouble(self, "Detect Cables", "Eigenvalue ratio threshold:", 0.25, 0.0, 1.0, 3)
-        if not ok: return
-        radius, ok = QInputDialog.getDouble(self, "Detect Cables", "Max radius threshold (0 = no limit):", 0.0, 0.0, 1e9, 6)
-        if not ok: return
-        if radius == 0.0: radius = None
-        min_comp, ok = QInputDialog.getInt(self, "Detect Cables", "Min component size:", 30, 1, 100000, 1)
-        if not ok: return
+        def on_region_selected(bounds):
+            # Get user parameters after region selection
+            k_ring, ok = QInputDialog.getInt(self, "Detect Cables", "Neighborhood k_ring:", 8, 1, 10, 1)
+            if not ok: return
+            eig_ratio, ok = QInputDialog.getDouble(self, "Detect Cables", "Eigenvalue ratio threshold:", 0.25, 0.0, 1.0, 3)
+            if not ok: return
+            radius, ok = QInputDialog.getDouble(self, "Detect Cables", "Max radius threshold (0 = no limit):", 0.0, 0.0, 1e9, 6)
+            if not ok: return
+            if radius == 0.0: radius = None
+            min_comp, ok = QInputDialog.getInt(self, "Detect Cables", "Min component size:", 30, 1, 100000, 1)
+            if not ok: return
 
-        self.signals.log.emit("🔎 Detecting cable-like regions...")
+            self.signals.log.emit("🔎 Detecting cable-like regions in selected area...")
 
-        def worker():
-            try:
-                mask, scores = detect_tubular_regions(
-                    self.state["vertices"], self.state["edges"], self.state["triangles"],
-                    k_ring=k_ring, eig_ratio_thresh=eig_ratio, radius_thresh=radius,
-                    min_component_size=min_comp
-                )
-                num = int(mask.sum())
-                self.signals.log.emit(f"Found {num} candidate cable vertices.")
-                if num == 0:
-                    self.signals.show_message.emit("Result", "No cable-like regions detected.")
-                    return
+            # Build vertex selection mask
+            pts = np.array([v.coords for v in self.state["vertices"]])
+            xmin, xmax, ymin, ymax, zmin, zmax = bounds
+            region_mask = (
+                (pts[:, 0] >= xmin) & (pts[:, 0] <= xmax) &
+                (pts[:, 1] >= ymin) & (pts[:, 1] <= ymax) &
+                (pts[:, 2] >= zmin) & (pts[:, 2] <= zmax)
+            )
 
-                # Prepare preview colors in worker thread
-                pts = np.array([v.coords for v in self.state["vertices"]])
-                colors = np.zeros((len(self.state["vertices"]), 3))
-                colors[mask] = np.array(pv.Color("red").int_rgb) / 255.0
-                colors[~mask] = np.array(pv.Color("#ccf5ff").int_rgb) / 255.0
+            def worker():
+                try:
+                    mask, scores = detect_tubular_regions(
+                        self.state["vertices"], self.state["edges"], self.state["triangles"],
+                        k_ring=k_ring, eig_ratio_thresh=eig_ratio, radius_thresh=radius,
+                        min_component_size=min_comp
+                    )
 
-                # Emit signal to update mesh on main thread
-                self.signals.mesh_update.emit(pts, colors)
+                    # Restrict to region
+                    mask = mask & region_mask
+                    num = int(mask.sum())
+                    self.signals.log.emit(f"Found {num} candidate cable vertices in region.")
+                    if num == 0:
+                        self.signals.show_message.emit("Result", "No cable-like regions detected in selection.")
+                        return
 
-                self.signals.log.emit("🧼 Smoothing detected cable regions...")
-                vertices_new, diff = taubin_smoothing_masked(
-                    self.state["vertices"], self.state["edges"], self.state["triangles"],
-                    mask, iterations=30, lambda_factor=0.6, mu_factor=-0.62
-                )
-                self.state["vertices"] = vertices_new
-                self.signals.log.emit("✅ Cable smoothing complete.")
+                    # Visualization colors
+                    pts = np.array([v.coords for v in self.state["vertices"]])
+                    colors = np.zeros((len(pts), 3))
+                    colors[mask] = np.array(pv.Color("red").int_rgb) / 255.0
+                    colors[~mask] = np.array(pv.Color("#ccf5ff").int_rgb) / 255.0
+                    self.signals.mesh_update.emit(pts, colors)
 
-                # Emit final mesh for main thread
-                pts_final = np.array([v.coords for v in self.state["vertices"]])
-                colors_final = np.zeros((len(self.state["vertices"]), 3))
-                colors_final[mask] = np.array(pv.Color("red").int_rgb) / 255.0
-                colors_final[~mask] = np.array(pv.Color("#ccf5ff").int_rgb) / 255.0
-                self.signals.mesh_update.emit(pts_final, colors_final)
+                    self.signals.log.emit("🧼 Smoothing detected cables in selected region...")
+                    vertices_new, diff = taubin_smoothing_masked(
+                        self.state["vertices"], self.state["edges"], self.state["triangles"],
+                        mask, iterations=30, lambda_factor=0.6, mu_factor=-0.62
+                    )
+                    self.state["vertices"] = vertices_new
+                    self.signals.log.emit("✅ Cable smoothing complete.")
 
-                self.signals.show_message.emit(
-                    "Done", f"Detected {num} vertices in cable regions; smoothing applied."
-                )
+                    pts_final = np.array([v.coords for v in self.state["vertices"]])
+                    colors_final = np.zeros((len(pts_final), 3))
+                    colors_final[mask] = np.array(pv.Color("red").int_rgb) / 255.0
+                    colors_final[~mask] = np.array(pv.Color("#ccf5ff").int_rgb) / 255.0
+                    self.signals.mesh_update.emit(pts_final, colors_final)
 
-            except Exception as e:
-                self.signals.error.emit(f"Cable detection/smoothing error: {e}")
+                    self.signals.show_message.emit(
+                        "Done", f"Detected {num} vertices in cable regions within selected area; smoothing applied."
+                    )
 
-        threading.Thread(target=worker, daemon=True).start()
+                except Exception as e:
+                    self.signals.error.emit(f"Cable detection/smoothing error: {e}")
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        # Start by letting user select region
+        self.select_mesh_region(on_region_selected)
+
 
     def curvature_simplify_mesh(self):
         if not self.state["vertices"]:
@@ -860,8 +1183,6 @@ class MeshApp(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
-
-
     def qem_simplify_mesh(self):
         if not self.state["vertices"]:
             QMessageBox.warning(self, "No Data", "Please build the structure first.")
@@ -870,7 +1191,7 @@ class MeshApp(QMainWindow):
             QMessageBox.critical(self, "QEM Not Available", "QEM extension module not found.")
             return
 
-        # Ask for percent reduction instead of target face count
+        # Ask user for percent reduction
         reduction_percent, ok = QInputDialog.getDouble(
             self, "QEM Simplification", "Reduction percent (0..100):",
             50.0, 1.0, 99.0, 1
@@ -885,71 +1206,189 @@ class MeshApp(QMainWindow):
 
         def worker():
             try:
+                # Convert current state to numpy arrays
                 v_np, f_np = vertices_triangles_to_numpy(self.state["vertices"], self.state["triangles"])
                 n_faces = f_np.shape[0]
 
-                # Compute target faces based on percent reduction
+                # Compute target faces
                 target_faces = max(1, int(n_faces * (1.0 - reduction_percent / 100.0)))
 
-                # Python callback for progress
+                # Progress callback
                 def progress_cb(p):
-                    self.signals.progress.emit(p)
+                    self.signals.progress.emit(max(0, min(100, int(p))))
 
-                # Run C++ QEM simplify_mesh with callback
+                # --- QEM simplification ---
                 new_v_np, new_f_np = QEM.simplify_mesh(v_np, f_np, target_faces, progress_cb)
 
-                # Convert back to Vertex/Triangle objects
-                new_vertices = [Vertex(coords=new_v_np[i], index=i) for i in range(len(new_v_np))]
-                new_triangles = [Triangle(vertex_indices=list(new_f_np[i]), index=i) for i in range(len(new_f_np))]
+                # --- FORCE CLEAN NUMERIC CONVERSION ---
+                new_v = np.array([np.array(v, dtype=np.float64) for v in new_v_np], dtype=np.float64)
+                new_f = np.array([np.array(f, dtype=np.int64) for f in new_f_np], dtype=np.int64)
 
-                # Recompute normals
-                for t in new_triangles:
-                    t.recompute_normal(new_vertices)
+                # --- Compact vertices to remove unused ---
+                used_vertex_ids = np.unique(new_f.reshape(-1))
+                old_to_compact = -np.ones(new_v.shape[0], dtype=np.int64)
+                for compact_idx, old_idx in enumerate(used_vertex_ids):
+                    old_to_compact[old_idx] = compact_idx
+
+                if used_vertex_ids.size != new_v.shape[0]:
+                    compact_v = new_v[used_vertex_ids]
+                    remapped_f = np.array([[old_to_compact[idx] for idx in face] for face in new_f],
+                                        dtype=np.int64)
+                else:
+                    compact_v = new_v
+                    remapped_f = new_f.astype(np.int64)
+
+                # --- Build Vertex and Triangle objects ---
+                new_vertices = [Vertex(coords=np.array(compact_v[i], dtype=np.float64), index=i)
+                                for i in range(compact_v.shape[0])]
+                new_triangles = [Triangle(vertex_indices=[int(remapped_f[i, 0]),
+                                                        int(remapped_f[i, 1]),
+                                                        int(remapped_f[i, 2])],
+                                        index=i)
+                                for i in range(remapped_f.shape[0])]
 
                 # --- Rebuild edges ---
                 edge_dict = {}
                 new_edges = []
-                step = 0
-                total_steps = len(new_triangles) * 3
-
                 for tri in new_triangles:
                     vids = tri.vertex_indices
-                    edge_vertices = [
-                        (vids[1], vids[2]),
-                        (vids[2], vids[0]),
-                        (vids[0], vids[1]),
-                    ]
-                    for i, (v_start, v_end) in enumerate(edge_vertices):
-                        key = tuple(sorted((v_start, v_end)))
+                    tri.edge_indices = []
+                    edge_vertices = [(vids[0], vids[1]), (vids[1], vids[2]), (vids[2], vids[0])]
+                    for v_start, v_end in edge_vertices:
+                        key = (min(v_start, v_end), max(v_start, v_end))
                         if key in edge_dict:
                             edge_index = edge_dict[key]
                             new_edges[edge_index].triangles.append(tri.index)
-                            tri.edge_indices[i] = edge_index
+                            tri.edge_indices.append(edge_index)
                         else:
+                            e = Edge(v1=key[0], v2=key[1])
+                            e.triangles.append(tri.index)
                             edge_index = len(new_edges)
-                            edge = Edge(v1=key[0], v2=key[1])
-                            edge.triangles.append(tri.index)
-                            new_edges.append(edge)
+                            new_edges.append(e)
                             edge_dict[key] = edge_index
-                            tri.edge_indices[i] = edge_index
+                            tri.edge_indices.append(edge_index)
 
-                        step += 1
-                        if step % 50 == 0:
-                            progress_percent = int((step / total_steps) * 100)
-                            self.signals.progress.emit(progress_percent)
+                # --- Compute normals and valence ---
+                for v in new_vertices:
+                    v.valence = 0
+                    v.triangle_indices = []
+
+                for tri in new_triangles:
+                    p0, p1, p2 = [new_vertices[i].coords for i in tri.vertex_indices]
+                    n = np.cross(p1 - p0, p2 - p0)
+                    norm = np.linalg.norm(n)
+                    tri.normal = n / norm if norm > 0 else np.array([0.0, 0.0, 0.0])
+                    for vi in tri.vertex_indices:
+                        new_vertices[vi].valence += 1
+                        new_vertices[vi].triangle_indices.append(tri.index)
+
+                # --- Fix non-manifold edges ---
+                def fix_non_manifold_edges(vertices, triangles, edges):
+                    edges_to_remove = [e for e in edges if len(e.triangles) > 2]
+                    bad_tri_indices = set()
+                    for e in edges_to_remove:
+                        bad_tri_indices.update(e.triangles)
+                    triangles = [t for t in triangles if t.index not in bad_tri_indices]
+
+                    # Rebuild edges
+                    edge_dict = {}
+                    new_edges = []
+                    for t in triangles:
+                        t.edge_indices = []
+                        vids = t.vertex_indices
+                        edge_vertices = [(vids[0], vids[1]), (vids[1], vids[2]), (vids[2], vids[0])]
+                        for v_start, v_end in edge_vertices:
+                            key = tuple(sorted((v_start, v_end)))
+                            if key in edge_dict:
+                                edge_index = edge_dict[key]
+                                new_edges[edge_index].triangles.append(t.index)
+                                t.edge_indices.append(edge_index)
+                            else:
+                                e = Edge(v1=key[0], v2=key[1])
+                                e.triangles.append(t.index)
+                                edge_index = len(new_edges)
+                                new_edges.append(e)
+                                edge_dict[key] = edge_index
+                                t.edge_indices.append(edge_index)
+                    return triangles, new_edges
+
+                new_triangles, new_edges = fix_non_manifold_edges(new_vertices, new_triangles, new_edges)
+
+                # --- Fill holes ---
+                self.signals.log.emit("🩹 Detecting & filling holes...")
+                new_vertices, new_edges, new_triangles = fill_mesh_holes(new_vertices, new_edges, new_triangles, max_loop_size=500)
+
+                # --- Remove isolated vertices ---
+                used_vertex_ids = set()
+                for tri in new_triangles:
+                    used_vertex_ids.update(tri.vertex_indices)
+
+                old_to_new_idx = {}
+                new_vertices_compact = []
+                for v in new_vertices:
+                    if v.index in used_vertex_ids:
+                        old_to_new_idx[v.index] = len(new_vertices_compact)
+                        new_vertices_compact.append(v)
+
+                new_triangles_compact = []
+                for tri in new_triangles:
+                    tri.vertex_indices = [old_to_new_idx[i] for i in tri.vertex_indices]
+                    new_triangles_compact.append(tri)
+
+                new_vertices = new_vertices_compact
+                new_triangles = new_triangles_compact
+
+                # --- Rebuild edges after hole-filling and vertex compaction ---
+                edge_dict = {}
+                new_edges = []
+                for tri in new_triangles:
+                    tri.edge_indices = []
+                    vids = tri.vertex_indices
+                    for v_start, v_end in [(vids[0], vids[1]), (vids[1], vids[2]), (vids[2], vids[0])]:
+                        key = (min(v_start, v_end), max(v_start, v_end))
+                        if key in edge_dict:
+                            edge_index = edge_dict[key]
+                            new_edges[edge_index].triangles.append(tri.index)
+                            tri.edge_indices.append(edge_index)
+                        else:
+                            e = Edge(v1=key[0], v2=key[1])
+                            e.triangles.append(tri.index)
+                            edge_index = len(new_edges)
+                            new_edges.append(e)
+                            edge_dict[key] = edge_index
+                            tri.edge_indices.append(edge_index)
+
+                # --- Recompute vertex normals ---
+                MeshOperations.compute_vertex_normals(new_vertices, new_triangles)
+
+                # --- Preserve colors ---
+                if self.state.get("colors") is not None:
+                    try:
+                        old_colors = np.asarray(self.state["colors"])
+                        if old_colors.shape[0] == v_np.shape[0]:
+                            from scipy.spatial import cKDTree
+                            tree = cKDTree(v_np)
+                            dists, idxs = tree.query(compact_v, k=1)
+                            colors = old_colors[idxs]
+                        else:
+                            colors = np.tile(np.array([0.8, 0.95, 1.0]), (len(new_vertices), 1))
+                    except Exception:
+                        colors = np.tile(np.array([0.8, 0.95, 1.0]), (len(new_vertices), 1))
+                else:
+                    colors = np.tile(np.array([0.8, 0.95, 1.0]), (len(new_vertices), 1))
 
                 # --- Update state ---
                 self.state["vertices"] = new_vertices
                 self.state["triangles"] = new_triangles
                 self.state["edges"] = new_edges
 
-                self.signals.log.emit(f"✅ QEM complete. Faces: {len(new_triangles)}, Edges: {len(new_edges)}, Vertices: {len(new_vertices)}")
-
-                # Update plot (white colors)
-                pts, _ = vertices_triangles_to_numpy(new_vertices, new_triangles)
-                colors = np.ones((len(new_vertices), 3))
+                # --- Send updates to UI ---
+                pts = np.array([v.coords for v in new_vertices], dtype=np.float64)
                 self.signals.mesh_update.emit(pts, colors)
-
+                self.signals.log.emit(
+                    f"✅ QEM complete. Faces: {len(new_triangles)}, "
+                    f"Edges: {len(new_edges)}, Vertices: {len(new_vertices)}"
+                )
                 self.signals.progress.emit(100)
 
             except Exception as e:
@@ -961,6 +1400,8 @@ class MeshApp(QMainWindow):
                 self.progress.hide()
 
         threading.Thread(target=worker, daemon=True).start()
+
+
 
 def main():
     # Required for PyVista + Qt to cooperate nicely

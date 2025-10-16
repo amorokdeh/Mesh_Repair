@@ -6,4 +6,9 @@ exported_mesh.json
 sanity_check_report.txt
 *.stl
 *.pyc
-+.pyd
+/env
+/build
+/env
+/env/Scripts
+/env
+QEM.cp313-win_amd64.pyd

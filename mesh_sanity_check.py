@@ -7,7 +7,9 @@ def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
         "errors": [],       # Critical issues that invalidate the mesh
         "warnings": [],     # Non-fatal anomalies or quality concerns
         "holes": [],        # List of holes found (if any)
-        "euler_check": None # Result of Euler characteristic check (V - E + F)
+        "euler_check": None, # Result of Euler characteristic check (V - E + F)
+        "boundary_vertices": set()  # indices of boundary vertices for visualization
+
     }
 
     def report(msg):
@@ -24,6 +26,11 @@ def sanity_check_mesh(vertices, edges, triangles, progress_callback=None):
             results["errors"].append(f"Edge {i} belongs to more than 2 triangles ({count_tri}).")
     # Collect edges with only one adjacent triangle → these are boundary edges
     boundary_edges = [i for i, e in enumerate(edges) if len(e.triangles) == 1]
+    # Collect boundary vertices
+    for e_idx in boundary_edges:
+        edge = edges[e_idx]
+        results["boundary_vertices"].add(edge.v1)
+        results["boundary_vertices"].add(edge.v2)
 
     # --- 2. Check vertex valence (how many triangles each vertex is part of) ---
     report("Checking vertex valence...")

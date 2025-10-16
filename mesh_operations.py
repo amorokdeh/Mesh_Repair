@@ -2,6 +2,12 @@ import numpy as np
 import pyvista as pv
 from math import acos, degrees
 from collections import deque, defaultdict
+from mesh_data_structure import (
+    build_mesh_from_stl, 
+    Vertex, 
+    Triangle, 
+    Edge
+)
 
 # Laplacian Smoothing: Smooths mesh by averaging vertex positions with neighbors
 def laplacian_smoothing(vertices, edges, triangles, iterations=1, lambda_factor=0.5):
@@ -327,3 +333,187 @@ def vertices_triangles_to_numpy(vertices, triangles):
     vertices_np = np.array([v.coords for v in vertices], dtype=np.float64)
     faces_np = np.array([t.vertex_indices for t in triangles], dtype=np.int32)
     return vertices_np.copy(), faces_np.copy()
+
+# ---------------------------
+# Hole detection and filling
+# ---------------------------
+
+from collections import defaultdict, deque
+
+def find_boundary_edges(edges):
+    """Return list of indices of edges that are boundary edges (only one adjacent triangle)."""
+    return [i for i, e in enumerate(edges) if len(e.triangles) == 1]
+
+def build_boundary_adjacency(edges, vertices):
+    """
+    Build adjacency map of boundary edges:
+      vertex_idx -> list of adjacent boundary vertices
+    Returns adjacency dict and list of boundary edge indices.
+    """
+    adjacency = defaultdict(list)
+    boundary_edges = find_boundary_edges(edges)
+    for e_idx in boundary_edges:
+        e = edges[e_idx]
+        adjacency[e.v1].append(e.v2)
+        adjacency[e.v2].append(e.v1)
+    return adjacency, boundary_edges
+
+def extract_ordered_loops_from_adjacency(adjacency):
+    """
+    Given adjacency of boundary vertices (vertex -> neighbours on boundary),
+    extract ordered loops (lists of vertex indices) for each connected component.
+    """
+    loops = []
+    visited = set()
+
+    for start in list(adjacency.keys()):
+        if start in visited:
+            continue
+        # follow the loop
+        loop = []
+        cur = start
+        prev = None
+        while True:
+            loop.append(cur)
+            visited.add(cur)
+            neighbors = adjacency[cur]
+            # choose neighbor that's not prev (if both exist)
+            nxt = None
+            if len(neighbors) == 0:
+                break
+            elif len(neighbors) == 1:
+                nxt = neighbors[0]
+            else:
+                # choose the neighbor different from prev (if any)
+                if prev is None:
+                    nxt = neighbors[0]
+                else:
+                    nxt = neighbors[0] if neighbors[1] == prev else neighbors[1]
+            prev, cur = cur, nxt
+            if cur == start or cur in visited:
+                break
+
+        # ensure loop is closed and has length > 2
+        if len(loop) >= 3:
+            # try to ensure distinct ordering by removing a tail if duplicated at end
+            # (in pathological adjacency graphs there can be duplicates)
+            unique_loop = []
+            seen = set()
+            for v in loop:
+                if v not in seen:
+                    unique_loop.append(v)
+                    seen.add(v)
+            if len(unique_loop) >= 3:
+                loops.append(unique_loop)
+
+    return loops
+
+def rebuild_connectivity(vertices, triangles):
+    """
+    Rebuild edges, triangle indices, vertex triangle lists and valences from scratch.
+    Returns (edges, triangles) where triangles' .index are reassigned 0..N-1.
+    """
+    # Reassign triangle indices
+    for i, tri in enumerate(triangles):
+        tri.index = i
+
+    edge_dict = {}
+    edges = []
+    for tri in triangles:
+        vids = tri.vertex_indices
+        tri.edge_indices = [-1, -1, -1]
+        # Skip degenerate triangles
+        if len(set(vids)) != 3:
+            continue
+        edge_vertices = [(vids[0], vids[1]), (vids[1], vids[2]), (vids[2], vids[0])]
+        for i_e, (v1, v2) in enumerate(edge_vertices):
+            key = tuple(sorted((v1, v2)))
+            if key in edge_dict:
+                ei = edge_dict[key]
+                edges[ei].triangles.append(tri.index)
+                tri.edge_indices[i_e] = ei
+            else:
+                e = Edge(v1=key[0], v2=key[1])
+                e.triangles.append(tri.index)
+                ei = len(edges)
+                edges.append(e)
+                edge_dict[key] = ei
+                tri.edge_indices[i_e] = ei
+
+    # Reset per-vertex data
+    for v in vertices:
+        v.valence = 0
+        v.triangle_indices = []
+
+    # Accumulate triangle references for vertices
+    for tri in triangles:
+        if len(set(tri.vertex_indices)) != 3:
+            continue
+        for vi in tri.vertex_indices:
+            vertices[vi].triangle_indices.append(tri.index)
+            vertices[vi].valence += 1
+
+    return edges, triangles
+
+def fill_loop_with_fan(vertices, triangles, loop):
+    """
+    Triangulate the polygon loop by creating fan triangles around loop[0].
+    Adds new Triangle objects to triangles in-place. Does not create new vertices.
+    """
+    if len(loop) < 3:
+        return
+
+    base = loop[0]
+    # Add triangles (base, loop[i], loop[i+1]) for i = 1..n-2
+    start_index = len(triangles)
+    for i in range(1, len(loop) - 0 - 1):
+        a = base
+        b = loop[i]
+        c = loop[i + 1]
+        # Ensure triangle vertices are distinct
+        if a == b or b == c or c == a:
+            continue
+        tri = Triangle(vertex_indices=[a, b, c], index=start_index)
+        triangles.append(tri)
+        start_index += 1
+
+def fill_mesh_holes(vertices, edges, triangles, max_loop_size=200):
+    """
+    Detect boundary loops and fill them with fan triangulation.
+    Returns updated (vertices, edges, triangles).
+    """
+
+    adjacency, boundary_edges = build_boundary_adjacency(edges, vertices)
+    if not adjacency:
+        return vertices, edges, triangles
+
+    loops = extract_ordered_loops_from_adjacency(adjacency)
+    added_any = False
+
+    for loop in loops:
+        if len(loop) <= 2 or len(loop) > max_loop_size:
+            continue
+        # Fill by fan
+        fill_loop_with_fan(vertices, triangles, loop)
+        added_any = True
+
+    if not added_any:
+        return vertices, edges, triangles
+
+    # Rebuild connectivity
+    edges, triangles = rebuild_connectivity(vertices, triangles)
+
+    # --- Fix non-manifold edges ---
+    edges_to_remove = [e for e in edges if len(e.triangles) > 2]
+    if edges_to_remove:
+        bad_tri_indices = set()
+        for e in edges_to_remove:
+            bad_tri_indices.update(e.triangles)
+        triangles = [t for t in triangles if t.index not in bad_tri_indices]
+        edges, triangles = rebuild_connectivity(vertices, triangles)
+
+    # Recompute normals
+    MeshOperations.compute_triangle_normals(vertices, triangles)
+    MeshOperations.compute_vertex_normals(vertices, triangles)
+
+    return vertices, edges, triangles
