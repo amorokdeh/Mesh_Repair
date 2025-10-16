@@ -1,0 +1,9 @@
+/__pycache__
+/env
+/build
+mesh_data.json
+exported_mesh.json
+sanity_check_report.txt
+*.stl
+*.pyc
++.pyd
