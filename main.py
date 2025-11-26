@@ -209,7 +209,7 @@ class MeshApp(QMainWindow):
         self.action_curvature.triggered.connect(self.curvature_simplify_mesh)
         actions_menu.addAction(self.action_curvature)
 
-        # --- App state (kept same semantics as your Tk app) ---
+        # --- App state ---
         self.state = {
             "file_path": None,
             "vertices": None,
